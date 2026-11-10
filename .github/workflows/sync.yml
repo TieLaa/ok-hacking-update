@@ -95,3 +95,20 @@ jobs:
           git tag -f "$TAG"
           git push origin HEAD:main
           git push -f origin "refs/tags/$TAG"
+
+      # 国内更新源：China profile 的 git_url 指向 cnb.cool 上的同名镜像。
+      # 纯事件驱动，没有定时抓取：GitHub 这边一推完就顺带把 main + tags 推过去。
+      # 令牌是 cnb 的访问令牌（用户名固定 cnb），存在本仓库 Actions secrets 的 CNB_TOKEN。
+      - name: Mirror to CNB (cnb.cool)
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CNB_TOKEN:-}" ]; then
+            echo "::error::CNB_TOKEN 未配置，国内更新源不会更新"
+            exit 1
+          fi
+          cd dst
+          git remote add cnb "https://cnb:${CNB_TOKEN}@cnb.cool/TieLaa/ok-hacking-update.git"
+          git push cnb "HEAD:refs/heads/main" --force
+          git push cnb --tags --force
