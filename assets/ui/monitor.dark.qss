@@ -1,0 +1,193 @@
+/* 监控页 · 深色主题（改完存盘自动生效，不用重启） */
+
+QWidget#monitorRoot {
+    background: transparent;
+}
+
+QFrame#monitorCard {
+    background: #2b2b2b;
+    border: 1px solid #353535;
+    border-radius: 8px;
+}
+
+QFrame#monitorSplitHandle {
+    background: #383838;
+    border-radius: 1px;
+}
+
+/* 编辑态把手有 7px 宽好抓，但只画中间 1px，看起来还是细线 */
+
+QFrame#monitorSplitHandle:hover {
+    background: #4cc2ff;
+}
+
+QFrame#monitorRow {
+    border-bottom: 1px dashed #383838;
+}
+
+QFrame#monitorHalo {
+    background: rgba(78, 203, 141, 46);
+    border-radius: 8px;
+}
+
+QFrame#monitorDot {
+    background: #6f6f6f;
+    border-radius: 4px;
+}
+
+QFrame#monitorDot[state="running"] { background: #4ecb8d; }
+QFrame#monitorDot[state="queued"]  { background: #f0a44a; }
+QFrame#monitorDot[state="paused"]  { background: #f0a44a; }
+QFrame#monitorDot[state="idle"]    { background: #6f6f6f; }
+
+QLabel[mRole="connName"] {
+    color: #e8e8e8;
+    font-size: 12.5px;
+}
+
+QLabel[mRole="connMeta"] {
+    color: #9a9a9a;
+    font-size: 11.5px;
+}
+
+QLabel[mRole="kicker"] {
+    color: #9a9a9a;
+    font-size: 11.5px;
+}
+
+QLabel[mRole="heroText"] {
+    color: #e8e8e8;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+QLabel[mRole="statKey"] {
+    color: #6f6f6f;
+    font-size: 11px;
+}
+
+QLabel[mRole="statValue"] {
+    color: #e8e8e8;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+QLabel[mRole="statSuffix"] {
+    color: #9a9a9a;
+    font-size: 11px;
+    padding-bottom: 2px;
+}
+
+QLabel[mRole="nowLabel"] {
+    color: #9a9a9a;
+    font-size: 11.5px;
+}
+
+QLabel[mRole="nowValue"] {
+    color: #e8e8e8;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QLabel[mRole="hintText"] {
+    color: #6f6f6f;
+    font-size: 11px;
+}
+
+QLabel[mRole="cardTitle"] {
+    color: #dcdcdc;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+QLabel[mRole="rowLeft"] {
+    color: #9a9a9a;
+    font-size: 12px;
+}
+
+QLabel[mRole="rowRight"] {
+    color: #e2e2e2;
+    font-size: 12px;
+}
+
+QLabel[mRole="tlTime"] {
+    color: #6f6f6f;
+    font-size: 11.5px;
+}
+
+QLabel[mRole="tlEvent"] {
+    color: #4cc2ff;
+    font-size: 12px;
+}
+
+QLabel[mRole="tlDetail"] {
+    color: #bdbdbd;
+    font-size: 12px;
+}
+
+QLabel[mRole="tlResult"] {
+    color: #4ecb8d;
+    font-size: 11px;
+}
+
+QProgressBar#monitorBar {
+    background: #3c3c3c;
+    border: none;
+    border-radius: 3px;
+}
+
+QProgressBar#monitorBar::chunk {
+    border-radius: 3px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #4ecb8d, stop:1 #7fe0b0);
+}
+
+QPushButton#monitorGhost {
+    background: transparent;
+    color: #cfcfcf;
+    border: 1px solid #454545;
+    border-radius: 6px;
+    padding: 0 12px;
+    font-size: 12px;
+}
+
+QPushButton#monitorGhost:hover { background: #333333; }
+
+/* ---- 布局编辑态 ---- */
+
+QLabel[mRole="hiddenHint"] {
+    color: #6f6f6f;
+    font-size: 11px;
+}
+
+/* ---- 分数预测 / 六维 ---- */
+
+QLabel[mRole="scoreValue"] {
+    color: #4cc2ff;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+QLabel[mRole="skillTag"] {
+    color: #9a9a9a;
+    font-size: 11.5px;
+}
+
+QLabel[mRole="attrName"] {
+    color: #6f6f6f;
+    font-size: 11px;
+}
+
+QLabel[mRole="attrValue"] {
+    color: #e8e8e8;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+QLabel[mRole="skillValue"] {
+    color: #e8e8e8;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+QLabel[mRole="skillGain"] { color: #4ecb8d; font-size: 11.5px; }
