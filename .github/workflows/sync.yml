@@ -49,6 +49,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: dst
+          # checkout 默认只拉 1 层历史，推 cnb 时会被拒（shallow update not allowed）
+          fetch-depth: 0
 
       - name: Copy deploy.txt entries
         run: |
