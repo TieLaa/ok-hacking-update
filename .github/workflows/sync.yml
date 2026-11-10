@@ -1,0 +1,87 @@
+name: Sync from source
+
+# 这个仓库（ok-hacking-update）不是手写的：它由「源仓库某个 tag」按 deploy.txt
+# 自动同步而来。同步逻辑放在这里，是为了不需要跨仓库写权限（PAT / GitHub App）。
+# 源仓库 TieLaa/ok-hacking 公开后，本 workflow 匿名就能读它。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "源仓库的 tag（留空 = 自动取最新 v*）"
+        required: false
+  schedule:
+    - cron: "17 3 * * *"   # 每天 03:17 UTC（北京时间 11:17）
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag=$(curl -fsSL "https://api.github.com/repos/TieLaa/ok-hacking/tags?per_page=1" \
+                  | python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['name'] if data else '')")
+          fi
+          if [ -z "$tag" ]; then
+            echo "no tag found" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check out source at tag
+        uses: actions/checkout@v4
+        with:
+          repository: TieLaa/ok-hacking
+          ref: ${{ steps.tag.outputs.tag }}
+          path: src
+
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          path: dst
+
+      - name: Copy deploy.txt entries
+        run: |
+          set -euo pipefail
+          cd src
+          while IFS= read -r line; do
+            line="$(printf '%s' "$line" | tr -d '\r')"
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            if [ -e "$line" ]; then
+              mkdir -p "../dst/$(dirname "$line")"
+              cp -a "$line" ../dst/
+              echo "copied: $line"
+            else
+              echo "skip (source 里没有): $line"
+            fi
+          done < deploy.txt
+          cp .update_repo_gitignore ../dst/.gitignore
+
+      - name: Commit and tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd dst
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no content change"
+          else
+            git commit -m "sync $TAG"
+          fi
+          git tag -f "$TAG"
+          git push origin HEAD:main
+          git push -f origin "refs/tags/$TAG"
