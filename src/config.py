@@ -12,7 +12,7 @@ from src.util.log_noise import install_quiet_filters
 # 都会 import 本模块，是唯一能覆盖全部启动路径的单点（细节见该模块 docstring）。
 install_quiet_filters()
 
-version = "0.1.9"
+version = "0.1.10"
 #不需要修改version, Github Action打包会自动修改
 
 gui_config = {
@@ -93,7 +93,12 @@ config = {
         # optional, if set, will search the exe only
         'hwnd_class': 'UnityWndClass', #增加重名检查准确度
         'interaction': [GirlsInteraction], # 只保留实测可用的真鼠标后端（2026-10-29）：PostMessage 对本游戏完全无效，Pynput/PyDirect 需要前台且不能配合 GirlsInteraction 的置前逻辑，列在首页只会让人选错
-        'capture_method': ['WGC'],  # 只保留实测可用的 WGC（2026-10-29）：BitBlt 系对 Unity 全屏会拿到黑帧/旧帧；WGC 支持遮挡捕获
+        # WGC 首选（Win11 build 20348+）；Win10 上 ok-script 的 windows_graphics_available()
+        # 直接判不可用，自动回退 BitBlt_RenderFull（PrintWindow + PW_RENDERFULLCONTENT，
+        # 2026-11-10 实测与 WGC 逐像素一致、完全遮挡也能抓、13.6ms/帧）。
+        # 2026-10-29 收窄成只有 WGC 时误伤了这条回退，导致 Win10 用户报
+        # `cant find a usable windows capture`。
+        'capture_method': ['WGC', 'BitBlt_RenderFull'],
         'check_hdr': False, #当用户开启AutoHDR时候提示用户, 但不禁止使用
         'force_no_hdr': False, #True=当用户开启AutoHDR时候禁止使用
         'require_bg': True # 要求使用后台截图
