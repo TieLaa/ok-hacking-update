@@ -68,6 +68,16 @@ jobs:
           done < deploy.txt
           cp .update_repo_gitignore ../dst/.gitignore
 
+      - name: Stamp version from tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # 源仓库 CI 的 stamp 只改了它自己的工作区，没进这个仓库；
+          # launcher 虽然会用 pyappify.app_version 注入，但 config.py 不能是 dev。
+          sed -i -E "s/^version = \"[^\"]*\"/version = \"${TAG#v}\"/" dst/src/config.py
+          grep -n '^version' dst/src/config.py
+
       - name: Commit and tag
         env:
           TAG: ${{ steps.tag.outputs.tag }}
