@@ -306,25 +306,41 @@ class GirlsInteraction(BaseInteraction):
         except Exception:                           # noqa: BLE001
             pass
 
+    def _ready_to_act(self, *, log_skip=False, raise_if_no_foreground=False):
+        """动作前的统一闸门：True = 可以动手。点击/按下/拖动/滚动/按键全走这里。
+
+        顺序是有历史原因的（2026-10-25 / 10-29 两次实事故）：
+        1. `_blocked()`：暂停/停止后一个动作都不许发；
+        2. `wait_for_user_idle()`：用户还在用键鼠就等（用户操作优先）；
+        3. 再查一次：等的那几秒里用户可能按了暂停；
+        4. `ensure_foreground()`：抢不到前台就**绝不动手** —— 真实鼠标事件会落到
+           别的窗口上，实测点到了 ok-script GUI 上。
+
+        `raise_if_no_foreground`：点击类是硬失败（抛错让人看见）；按下/移动/滚动类
+        静默放弃（下一拍会重试）。
+        """
+        if self._blocked():
+            return False
+        self.wait_for_user_idle()
+        if self._blocked():
+            if log_skip:
+                logger.info("停止/暂停请求 → 本次点击跳过")
+            return False
+        if not self.ensure_foreground():
+            if self._blocked():          # 抢前台途中被停止/暂停叫停，不是故障
+                return False
+            if raise_if_no_foreground:
+                raise RuntimeError("游戏窗口未能置前，放弃本次点击")
+            return False
+        return True
+
     def click(self, x=-1, y=-1, move_back=False, name=None, down_time=0.03, move=True, key="left"):
         if x < 0 or y < 0:
             x = round(self.capture.width * 0.5)
             y = round(self.capture.height * 0.5)
 
-        # 用户还在用键鼠 → 一声不响地等着（2026-10-29：用户操作永远优先）
-        if self._blocked():
+        if not self._ready_to_act(log_skip=True, raise_if_no_foreground=True):
             return
-        self.wait_for_user_idle()
-        if self._blocked():
-            logger.info("停止/暂停请求 → 本次点击跳过")
-            return
-
-        # 抢不到前台就**绝不点击**：真实鼠标事件一定会落到别的窗口上，
-        # 轻则空点、重则把别的程序按坏（实测点到了 ok-script GUI 上）。
-        if not self.ensure_foreground():
-            if self._blocked():         # 是抢前台途中被停止/暂停叫停的，不是故障
-                return
-            raise RuntimeError("游戏窗口未能置前，放弃本次点击")
         saved = win32api.GetCursorPos()
         target = self._move_cursor(x, y) if move else None
         # 按住时间不能太短：实测「启程」这类按钮 70ms 的点击会被丢弃，
@@ -343,12 +359,7 @@ class GirlsInteraction(BaseInteraction):
         if x < 0 or y < 0:
             x = round(self.capture.width * 0.5)
             y = round(self.capture.height * 0.5)
-        if self._blocked():
-            return
-        self.wait_for_user_idle()
-        if self._blocked():
-            return
-        if not self.ensure_foreground():
+        if not self._ready_to_act():
             return
         self._move_cursor(x, y)
         self._down_key = key
@@ -366,12 +377,7 @@ class GirlsInteraction(BaseInteraction):
         self.mark_script_input()
 
     def scroll(self, x, y, scroll_amount):
-        if self._blocked():
-            return
-        self.wait_for_user_idle()
-        if self._blocked():
-            return
-        if not self.ensure_foreground():
+        if not self._ready_to_act():
             return
         self._move_cursor(x, y)
         win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, int(scroll_amount) * 120, 0)
@@ -381,12 +387,7 @@ class GirlsInteraction(BaseInteraction):
         # 2026-11-01：删掉没用过的 `down_btn` 参数（vulture 报的唯一一处真死参数，
         # 全仓无调用点传它）。其余 move_back / settle_time 是 ok 框架
         # `interaction_methods/base.py` 的签名契约，必须留着 —— 见 .vulture_whitelist.py
-        if self._blocked():
-            return
-        self.wait_for_user_idle()
-        if self._blocked():
-            return
-        if not self.ensure_foreground():
+        if not self._ready_to_act():
             return
         self._move_cursor(int(x), int(y))
         self.mark_script_input()
@@ -410,12 +411,7 @@ class GirlsInteraction(BaseInteraction):
             total /= 1000.0
         total = max(total, 0.05)
 
-        if self._blocked():
-            return
-        self.wait_for_user_idle()
-        if self._blocked():
-            return
-        if not self.ensure_foreground():
+        if not self._ready_to_act():
             return
         self._move_to(x1, y1)
         time.sleep(0.05)
@@ -443,12 +439,7 @@ class GirlsInteraction(BaseInteraction):
         return win32api.VkKeyScan(str(key)) & 0xFF
 
     def send_key_down(self, key):
-        if self._blocked():
-            return
-        self.wait_for_user_idle()
-        if self._blocked():
-            return
-        if not self.ensure_foreground():
+        if not self._ready_to_act():
             return
         vk = self._vk(key)
         win32api.keybd_event(vk, 0, 0, 0)

@@ -19,6 +19,9 @@ from .wheel import WheelHandlers
 from .unmarked import UnmarkedHandlers
 
 HANDLERS = (
+    # 整页公告（开服/更新公告）：游戏刚启动时会盖住一切，必须先关。
+    # 2026-11-10 实机：新装环境第一次跑，队长识别阶段连点「返回」7 次没反应 → 看门狗停任务。
+    PopupHandlers.handle_announcement,
     # 一局结束的「训练评分」弹层（`训练评分 7728 SS 点击屏幕继续`）：
     # 多角色队列的**达标判据**就靠它读个人评分（2026-11-04 实跑漏读导致「7700 分了还在跑」）。
     # 必须排在 handle_popup / handle_tap_to_continue 之前 —— 它们会直接点「点击屏幕继续」翻页，

@@ -26,30 +26,29 @@
 四个子目录的产物与老结构**逐字节同构**（文件名规则不变），所以老工具只需
 把「扫一层目录」换成「扫递归」，判据和回归语料都不用动。
 
-保留期：每局开头清一次 `日志保留天数` 之前建好的**整局目录**。只删
-「名字像局ID + 里面确实有那四个子目录之一」的目录，`clicks.jsonl`、
-`reports/`、`mcp/connections/`、`docs/shots/` 都不在扫描范围内。
+保留期：每局开头调一次 `retention.plan(kinds=RUNTIME)` —— 整局目录、点击流水
+裁行、框架按天日志、失效连接记录**四类的判据与实现都在
+`src/tasks/retention.py`**（2026-11-10 归集，运行时与运维脚本共用一套）。
+
 用户 2026-11-10 口径：**不做 jpg 开关** —— 真需要调试时没有图更麻烦，
 靠按局清理控制体积。
 """
 
 import json
 import os
-import re
-import shutil
 import threading
 import time
 
-from src.tasks.training.constants import JPEG_PARAMS, PROJECT_ROOT
+from src.tasks.training.constants import JPEG_PARAMS
 
 import cv2
 
-#: 所有运行期产物的根（GUI 运行时局目录直接挂在这里）
-LOG_ROOT = os.path.join(PROJECT_ROOT, "logs")
+from src.tasks import retention
+
+#: 所有运行期产物的根（GUI 运行时局目录直接挂在这里）—— 与保留策略同一来源
+LOG_ROOT = retention.LOG_ROOT
 #: 点击流水：全局单文件（跨局），每行带 round 字段
-CLICK_LOG = os.path.join(LOG_ROOT, "clicks.jsonl")
-#: 局目录判定：`1110-091635` 开头
-ROUND_RE = re.compile(r"^\d{4}-\d{6}_")
+CLICK_LOG = os.path.join(LOG_ROOT, retention.CLICK_LOG)
 #: 局目录里必然存在的子目录（清理时的安全阀：没有就绝不删）
 ROUND_SUBS = ("events", "unknown", "unmark", "debug")
 #: 局还没开始时的存证落点
@@ -96,6 +95,7 @@ class EvidenceSink:
         self.root = ""          # 本次运行的产物根
         self.round_id = ""      # 当前局ID
         self.round_dir = ""     # 当前局目录（绝对路径）
+        self.save = True        # 是否落盘（安装包默认关，见 config「保存调试存证」）
         self._last_snap = 0.0   # 事件存帧限流
         self._meta = {}
         self._log = None        # 存证失败时用任务自己的 log_debug 打一行
@@ -121,15 +121,25 @@ class EvidenceSink:
         return self.root
 
     def begin_round(self, *, captain="", handover=False, round_no=0,
-                    style="", entry="GUI", keep_days=3):
+                    style="", entry="GUI", keep_days=3, save=True):
         """开一局：清旧目录 → 建新目录 → 写 meta.json。
 
         返回局目录的绝对路径。时间戳取**调用时刻**，调用点必须在
         `recover_to_lobby()` **之后**（回大厅可能几十秒，那段时间不属于这一局）。
+
+        `save=False` = 这一局不落盘（安装包默认）：旧目录照常清理，
+        但不建目录、不写 meta、后续所有 dump 直接返回。
         """
         if not self.root:
             self.begin_run()
         self.prune(keep_days)
+
+        self.save = bool(save)
+        if not self.save:
+            self.round_id = ""
+            self.round_dir = ""
+            self._meta = {}
+            return ""
 
         parts = [_stamp()]
         if handover:
@@ -209,6 +219,8 @@ class EvidenceSink:
 
     def snap_event(self, handler, texts, frame=None, clicks=None):
         """事件级截图 + JSON（报告页「事件 ↔ 截图」用）。同一秒最多一张。"""
+        if not self.save:
+            return None
         now = time.time()
         if now - self._last_snap < 1.0:
             return None
@@ -231,6 +243,8 @@ class EvidenceSink:
 
     def dump_unknown(self, texts, tag, frame=None, step=0):
         """完全认不出来的界面：jpg + OCR 文本（文本才是排查时真正读的东西）。"""
+        if not self.save:
+            return None
         try:
             base = os.path.join(self._sub("unknown"), f"{_stamp()}_{tag}_s{step}")
             if frame is not None:
@@ -243,6 +257,8 @@ class EvidenceSink:
 
     def dump_unmark(self, texts, tag, frame=None, step=0, cards=None, picked=None, note=""):
         """未标注样本：按品质色猜着选的页面，三件套 jpg/txt/json。"""
+        if not self.save:
+            return None
         try:
             base = os.path.join(self._sub("unmark"), f"{_stamp()}_{tag}_s{step}")
             if frame is not None:
@@ -262,6 +278,8 @@ class EvidenceSink:
 
     def dump_debug(self, texts, tag, frame=None, summary="", actions=None):
         """点不动 / 异常的调试包：frame.jpg + ocr.txt + actions.txt + threads.txt。"""
+        if not self.save:
+            return None
         try:
             folder = self._sub("debug", f"{_stamp()}_{tag}")
             if frame is not None:
@@ -282,6 +300,8 @@ class EvidenceSink:
 
     def dump_frame(self, kind, texts, frame=None, idx=0, header=""):
         """限流校准帧（技能三选一 / 炒股 / 科目页）：`<kind><序号>` 由调用方管。"""
+        if not self.save:
+            return None
         try:
             stamp = _stamp()
             folder = self._sub("debug")
@@ -301,6 +321,8 @@ class EvidenceSink:
 
     def click(self, record):
         """每次点击一行，追加到全局 `logs/clicks.jsonl`（带 round）。"""
+        if not self.save:
+            return
         try:
             os.makedirs(os.path.dirname(CLICK_LOG), exist_ok=True)
             line = dict(record)
@@ -312,49 +334,17 @@ class EvidenceSink:
 
     # ---------- 保留期 ----------
 
-    def prune(self, keep_days=3):
-        """删掉 `keep_days` 天之前的**整局目录**；0 = 不清理。
+    def prune(self, keep_days=3, log_dir=None):
+        """按 `日志保留天数` 清理：整局目录 + 点击流水裁行 + 按天日志 + 连接记录。
 
-        安全阀有三道：名字必须像局ID、里面必须有 `events|unknown|unmark|debug`
-        之一、必须是目录。所以 `clicks.jsonl` / `reports/` / `mcp/connections/`
-        / `connections` / `docs/shots` 都不可能被误删。
+        **策略与实现都在 `src/tasks/retention.py`**（2026-11-10 归集）：
+        这里只说「运行时该管哪几类」（`retention.RUNTIME`），不再自己写判据。
+        `log_dir` 只给测试用（默认 `logs/`）。
         """
         keep_days = int(keep_days or 0)
         if keep_days <= 0:
             return []
-        cutoff = time.time() - keep_days * 86400
-        removed = []
-        for base in self._round_parents():
-            try:
-                names = os.listdir(base)
-            except OSError:
-                continue
-            for name in names:
-                if not ROUND_RE.match(name):
-                    continue
-                path = os.path.join(base, name)
-                if not os.path.isdir(path):
-                    continue
-                if not any(os.path.isdir(os.path.join(path, s)) for s in ROUND_SUBS):
-                    continue
-                try:
-                    if os.path.getmtime(path) >= cutoff:
-                        continue
-                    shutil.rmtree(path, ignore_errors=True)
-                    removed.append(path)
-                except OSError:
-                    continue
-        return removed
-
-    def _round_parents(self):
-        """局目录可能挂在两处：GUI 的 logs/ 和 MCP 的 logs/mcp/<run_id>/。"""
-        parents = [self.root or LOG_ROOT]
-        mcp = os.path.join(LOG_ROOT, "mcp")
-        try:
-            for name in os.listdir(mcp):
-                sub = os.path.join(mcp, name)
-                if os.path.isdir(sub) and name not in ("connections", "attempts"):
-                    parents.append(sub)
-        except OSError:
-            pass
-        return parents
+        actions = retention.plan(keep_days, log_dir or retention.LOG_ROOT,
+                                 kinds=retention.RUNTIME)
+        retention.apply(actions)
+        return [a["path"] for a in actions if a["kind"] == "round"]

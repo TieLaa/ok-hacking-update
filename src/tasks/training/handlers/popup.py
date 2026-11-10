@@ -116,6 +116,28 @@ class PopupHandlers:
             return True
         return False
 
+    def is_announcement(self, texts):
+        """整页公告（开服/更新公告）：标题「公告」+ 左侧「置顶/最新/热门」列表。
+
+        右上角 ✕ 没有文字、OCR 认不出，所以判据只能用列表标签 + 固定比例坐标。
+        """
+        return (self.exact_text(texts, labels.ANNOUNCEMENT_TITLE) is not None
+                and self.match_text(texts, labels.ANNOUNCEMENT_TABS) is not None)
+
+    def handle_announcement(self, texts):
+        """关掉整页公告（2026-11-10 实机：游戏刚启动时这页盖住全部界面）。
+
+        事故：新装/刚启动游戏时，任务进入「队长识别」→ 反复点右上「返回」（这页没有）
+        → 连续 3 轮没变化 → 看门狗停任务。判据放在队长识别之前（见 daycycle）。
+        """
+        if not self.is_announcement(texts):
+            return False
+        x = int(self.width * labels.ANNOUNCEMENT_CLOSE[0])
+        y = int(self.height * labels.ANNOUNCEMENT_CLOSE[1])
+        self.click(x, y, after_sleep=0.8)
+        self.log_info(f"公告页：点右上角关闭 @({x},{y})")
+        return True
+
     def handle_draw(self, texts):
         """大厅「幸运大抽奖」转盘：点「转一转」抽一次，结果交给弹窗处理。"""
         if self.match_text(texts, ("幸运大抽奖", "普通技能", "强力技能")) is None:

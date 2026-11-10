@@ -12,7 +12,7 @@ from src.util.log_noise import install_quiet_filters
 # 都会 import 本模块，是唯一能覆盖全部启动路径的单点（细节见该模块 docstring）。
 install_quiet_filters()
 
-version = "dev"
+version = "0.1.9"
 #不需要修改version, Github Action打包会自动修改
 
 gui_config = {
@@ -120,7 +120,7 @@ config = {
         }
     },
     'screenshots_folder': "screenshots", #截图存放目录, 每次重新启动会清空目录
-    'gui_title': '篮球少女 OK',  #窗口名
+    'gui_title': 'ok-hacking',  #窗口标题；实际显示 <gui_title> <version>，version 由 CI 按 tag 注入
     'template_matching': { # 可选, 如使用OpenCV的模板匹配
         'coco_feature_json': os.path.join('assets', 'coco_annotations.json'), #coco格式标记, 需要png图片, 在debug模式运行后, 会对进行切图仅保留被标记部分以减少图片大小
         'default_horizontal_variance': 0.002, #默认x偏移, 查找不传box的时候, 会根据coco坐标, match偏移box内的

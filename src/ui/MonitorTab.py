@@ -121,6 +121,9 @@ class _Actions(MonitorActions):
     def toggle_auto_training(self):
         self.tab.toggle_auto_training()
 
+    def stop_auto_training(self):
+        self.tab.stop_auto_training()
+
 
 class MonitorTab(CustomTab):
     """左侧导航的「监控」页。"""
@@ -370,6 +373,10 @@ class MonitorTab(CustomTab):
             # 对齐框架 TaskCard.update_buttons 的「enabled+paused → Start(Resume)」。
             "training_paused": (bool(getattr(task, "enabled", False))
                                 and bool(getattr(task, "paused", False))) if task else False,
+            # 任务是否 enabled（判据与框架 TaskCard.update_buttons 一致）：
+            # 第二栏【■ 停止】只在 enabled 时出现 —— disabled 时候框架那颗 Stop
+            # 也是藏起来的，只剩【开始】。
+            "training_enabled": bool(getattr(task, "enabled", False)) if task else False,
             "attrs": attrs,
             "score": score,
             "skill_color": skills["color"],
@@ -712,8 +719,9 @@ class MonitorTab(CustomTab):
         1. **执行器**（`og.executor`）是唯一的运行基础，**只有第一栏
            【启动/停止】能动它**：启动 = 接入 + `executor.start()`，
            停止 = `executor.pause()` + 释放截图会话（**不复位本开关**）。
-        2. **开**：enable `QuickMatchTask`，执行器还停着就**顺手**
-           `executor.start()`（`_wake_executor`，拉游戏 / 连设备仍归【启动】）。
+        2. **开**：只 enable `QuickMatchTask`；执行器还停着时**不**替用户启动，
+           只提示一句「按第一栏【启动】后生效」（2026-11-10 用户口径：
+           拨开关把执行器带起来是遗留问题 —— 启动的唯一入口是第一栏）。
         3. **关**：只 `task.disable()` —— **绝不去 pause 执行器**，
            关执行器不归它管（第二栏【暂停】也一样）。
         4. **开关状态落盘**：`QuickMatchTask` 是框架的 `TriggerTask`，
@@ -744,30 +752,14 @@ class MonitorTab(CustomTab):
             self._update_data()
             return
         if enabled:
-            # 开：执行器还停着就顺手唤醒（不是必须，接入仍归【启动】）
-            self._wake_executor()
-            logger.info("监控页：快速比赛 → 开")
+            # 开：执行器还停着**不**替用户启动（启动的唯一入口是第一栏），只提示一句
+            if self.executor is not None and getattr(self.executor, "paused", True):
+                self._notify("已开启快速比赛；执行器未启动，按第一栏【启动】后生效")
+            logger.info("监控页：快速比赛 → 开（不碰执行器）")
         else:
             # 关：只关自己。执行器归第一栏【停止】管，这里不碰
             logger.info("监控页：快速比赛 → 关（不动执行器）")
         self._update_data()
-
-    def _wake_executor(self):
-        """顺手把执行器从「暂停」里放出来 —— **只唤醒，不接入**。
-
-        `executor.start()` 只是把 `paused` 置 False 并唤醒调度循环；刷新设备、
-        拉起游戏 exe 这些「接入」归第一栏【启动】（`start_controller`）。
-        所以这里是「顺手而不是必须」：游戏没开着时唤醒也拿不到帧，
-        用户还是得按【启动】。返回是否真的动过执行器。
-        """
-        try:
-            if self.executor is not None and getattr(self.executor, "paused", True):
-                self.executor.start()
-                logger.info("监控页：顺手唤醒执行器（接入游戏仍是第一栏【启动】的事）")
-                return True
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"唤醒执行器失败: {e}")
-        return False
 
     def toggle_auto_training(self):
         """第二栏【开始 / 继续 / 暂停】—— 与框架 `TaskCard` 同源（2026-11-09 用户口径）。
@@ -810,6 +802,31 @@ class MonitorTab(CustomTab):
                 og.app.start_controller.start(task)
         except Exception as e:  # noqa: BLE001
             logger.error(f"自动训练开关失败: {e}")
+        self._update_data()
+
+    def stop_auto_training(self):
+        """第二栏【■ 停止】—— 与框架 `TaskCard.stop_clicked` 逐字同源（用户 2026-11-10 口径）。
+
+        ```python
+        self.task.disable()
+        self.task.unpause()
+        ```
+        只停这一个任务：
+        - 执行器、截图会话、快速比赛**都不碰**（执行器归第一栏）；
+        - 配置和「本次注入的队列参数」**不清**（任务卡的 Stop 也不清）。
+          想让注入的队列作废，改一次队长即可（`set_captain` 会清 `_launch_queue`）。
+        """
+        task = self._task()
+        if task is None:
+            logger.warning("监控页：没找到训练任务，停止未执行")
+            return
+        try:
+            task.disable()
+            task.unpause()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"停止自动训练失败: {e}")
+        else:
+            logger.info("监控页：自动训练 → 停止（task.disable + unpause）")
         self._update_data()
 
     def _task_by_name(self, name):

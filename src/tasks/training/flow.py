@@ -199,6 +199,7 @@ class TrainingFlowMixin:
             style=getattr(self, "_style", "") or "",
             entry="MCP" if self.mcp_driven else "GUI",
             keep_days=self.config.get("日志保留天数"),
+            save=bool(self.config.get("保存调试存证")),
         )
 
     def _run_one_round(self):

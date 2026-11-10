@@ -5,7 +5,8 @@ website: "https://github.com/TieLaa/ok-hacking"
 
 profiles:
   - name: "China"
-    git_url: "https://github.com/TieLaa/ok-hacking-update.git"
+    # 国内直接用 cnb.cool 镜像，避免 launcher 装/更新时连 github.com
+    git_url: "https://cnb.cool/TieLaa/ok-hacking-update.git"
     admin: true
     main_script: "main.py"
     requires_python: "3.12"

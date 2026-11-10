@@ -359,6 +359,10 @@ class DayCycleMixin:
         """
         state = getattr(self, "_style_probe_state", None) or "返回"
 
+        # 整页公告（游戏刚启动）会盖住一切：先关掉，否则下面点「返回」永远没反应。
+        if self.is_announcement(texts):
+            return self.handle_announcement(texts)
+
         if state == "返回":
             # 先确认这一页是不是已经能点日历了（训练室/校门口）
             if self._looks_like_calendar_host(texts):

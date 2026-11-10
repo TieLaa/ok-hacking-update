@@ -14,8 +14,8 @@ import os
 import re
 import time
 
-from PySide6.QtCore import QEvent, Qt, Signal, Slot
-from PySide6.QtGui import QIntValidator, QPixmap
+from PySide6.QtCore import QEvent, QSize, Qt, Signal, Slot
+from PySide6.QtGui import QIcon, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -35,6 +35,10 @@ PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 MISSING = "—"
 GROUP = "__group__"
 ATTR_ICON_DIR = os.path.join("assets", "ui", "attrs")
+# 第二栏【■ 停止】的图标：框架 `TaskCard.stop_button` 用的同一枚素材
+# （ok/ui/qt/qss/dark/stop.svg，白填充 = 主色按钮上的颜色），复制到本地 assets，
+# 不再 import `ok.ui.qt.common.OKIcon`（ok-script 3.0 会删掉那个模块）。
+STOP_ICON = os.path.join("assets", "ui", "stop.svg")
 # 和游戏底部属性面板一致：三行两列，顺序不能改
 DEFAULT_ATTRS = ("投射", "弹跳", "运控", "体能", "防守", "意识")
 
@@ -79,6 +83,10 @@ class MonitorActions:
 
     def toggle_auto_training(self):
         """第二栏的【开始/继续/暂停】：与框架任务卡同源（start/pause/unpause）。"""
+        pass
+
+    def stop_auto_training(self):
+        """第二栏的【■ 停止】：与框架任务卡同源（`TaskCard.stop_clicked`）。"""
         pass
 
 
@@ -158,6 +166,20 @@ class _HeroSplit(QWidget):
         self._apply()
 
 
+class _IconButton(PrimaryPushButton):
+    """方形**无文字**图标按钮：必须钉死 `minimumSizeHint`，否则图标画不到按钮里。
+
+    qfw `PushButton.paintEvent` 用 `minimumSizeHint().width()` 算图标 x：
+    `x = 12 + (width - hint) / 2`。无文字按钮的 hint 实测是 106px，
+    30px 按钮上 x = 12 + (30-106)/2 = **-26** —— 图标整个画到按钮外面（看着是空白）。
+    钉成 40 → x = 7，16px 图标落在 7~23、中心 15，正好居中。
+    2026-11-07 在旧的【■ 完全停止】上踩过一次，同一个坑。
+    """
+
+    def minimumSizeHint(self):
+        return QSize(40, self.height())
+
+
 class MonitorView(QWidget):
     """按 layout 描述生成卡片树，并在 update(data) 时刷新文本。"""
 
@@ -182,6 +204,9 @@ class MonitorView(QWidget):
         self._conn_state: str | None = None
         self._switch_quick: SwitchButton | None = None
         self._btn_train: QPushButton | None = None
+        # 第二栏【■ 停止】（图标按钮，无文字）：只在任务 enabled 时显示
+        self._btn_stop: QPushButton | None = None
+        self._stop_visible: bool | None = None
         # 「刷到目标分」勾选框 + 目标分输入框（用户 2026-11-05）
         self._check_score_stop: CheckBox | None = None
         self._edit_target: LineEdit | None = None
@@ -298,6 +323,16 @@ class MonitorView(QWidget):
         btn.installEventFilter(self)
         return btn
 
+    def _make_icon_button(self, icon, handler, size=30, tooltip=None):
+        """方形图标按钮（无文字），点击走 `_click_handler`（与其它按钮同一条路）。"""
+        btn = _IconButton(icon, "")
+        btn.setFixedSize(int(size), int(size))
+        if tooltip:
+            btn.setToolTip(tooltip)
+        btn._click_handler = self._keep(lambda h=handler: h())
+        btn.installEventFilter(self)
+        return btn
+
 
     def _attr_icon(self, name: str, width: int = 18):
         """属性小图标：assets/ui/attrs/<属性>.png；没有就返回 None（只显示文字）.
@@ -326,6 +361,10 @@ class MonitorView(QWidget):
     @Slot()
     def _slot_train(self):
         self.actions.toggle_auto_training()
+
+    @Slot()
+    def _slot_stop(self):
+        self.actions.stop_auto_training()
 
     # ---------- 目标分 / 专注药 槽（用户 2026-11-05） ----------
 
@@ -552,10 +591,24 @@ class MonitorView(QWidget):
 
             lay.addWidget(self._btn_train)
 
+            # 第二栏【■】停止（用户 2026-11-10 口径：照抄任务卡那颗【停止】，只留图标）：
+            # 语义 = 框架 `TaskCard.stop_clicked` → `task.disable()` + `task.unpause()`，
+            # 只停这一个任务；执行器/截图会话/快速比赛都不碰（那是第一栏的事）。
+            # 显隐也照任务卡：`enabled` 时才有这颗按钮（见 `_sync_switches`）。
+            if spec.get("show_stop", True):
+                self._btn_stop = self._make_icon_button(
+                    QIcon(get_relative_path(STOP_ICON)), self._slot_stop,
+                    size=int(spec.get("stop_size", 30)),
+                    tooltip="停止自动训练（＝任务卡的【停止】：停脚本，不断开游戏）")
+                self._btn_stop.setVisible(False)
+                self._stop_visible = False
+                lay.addWidget(self._btn_stop)
+
         # ---------- 目标分停 / 专注药（用户 2026-11-05 口径） ----------
         # 「持续刷到评分多少以后停止」复用**多角色队列**的提前终止机制：
         # 勾上 = 把队列配置成「指定队长:目标分」一项；取消 = 关掉多角色队列。
         # 顺序（用户 2026-11-05）：三个新控件**紧跟开始按钮**，快速比赛放最后。
+        # 2026-11-10：【■ 停止】插在【开始】右边（与任务卡同序），这三项顺延到它后面。
         if spec.get("show_score_stop", True):
             self._check_score_stop = CheckBox("刷到目标分")
             self._check_score_stop.setToolTip(
@@ -892,6 +945,7 @@ class MonitorView(QWidget):
             if self._train_state != state:
                 self._btn_train.setIcon(icon)
                 self._train_state = state
+            self._sync_stop_button(data)
         for key, switch in (("quick_enabled", self._switch_quick),):
             if switch is None or key not in data:
                 continue
@@ -901,6 +955,23 @@ class MonitorView(QWidget):
                 switch.setChecked(value)
                 switch.blockSignals(False)
         self._sync_extras(data)
+
+    def _sync_stop_button(self, data: dict):
+        """第二栏【■ 停止】显隐：照框架 `TaskCard.update_buttons` —— 任务 enabled 才出现。
+
+        `enabled+paused`（挂起态）也算 enabled，框架那颗 Stop 同样在，
+        点了同样是 `disable() + unpause()`。`training_enabled` 缺失时
+        退回 `training_active or training_paused`（两者都是 enabled 的子集）。
+        """
+        if self._btn_stop is None:
+            return
+        if "training_enabled" in data:
+            visible = bool(data.get("training_enabled"))
+        else:
+            visible = bool(data.get("training_active") or data.get("training_paused"))
+        if self._stop_visible != visible:
+            self._btn_stop.setVisible(visible)
+            self._stop_visible = visible
 
     def _sync_extras(self, data: dict):
         """「刷到目标分 / 目标分 / 允许吃专注药」按配置回填。

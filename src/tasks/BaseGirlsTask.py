@@ -526,6 +526,30 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         self.log_info(f"点击「{target.name}」")
         return True
 
+    def _button_target(self, key, texts, *, must):
+        """按 `labels.BUTTONS` 找按钮框；`OCR_LOSSY` 声明过的键支持「掉字」前缀兜底。
+
+        抽出来的原因（2026-11-10）：`click_button` 与 `click_button_and_expect`
+        各自抄了一份 12 行的「解析 → 兜底 → 警告」，改兜底规则要改两处 ——
+        和 2026-11-01 把文案集中到 labels 是同一种问题。
+        """
+        names = labels.BUTTONS[key] if isinstance(key, str) else tuple(key)
+        pool = self._ocr_region() if texts is None else texts
+        target = self.exact_text(pool, names)
+        if target is None and isinstance(key, str) and key in labels.OCR_LOSSY:
+            # 掉字兜底（只给 OCR_LOSSY 里声明过的键）：OCR 把「下一步」读成「下一」时
+            # 全等必然失败，这里按前缀 + 长度上限找，并留一条 warning 便于复盘。
+            prefix, max_len = labels.OCR_LOSSY[key]
+            target = next((t for t in pool
+                           if t.name.strip().startswith(prefix)
+                           and len(t.name.strip()) <= max_len), None)
+            if target is not None:
+                self.log_warning(f"按钮「{names[0]}」可能掉字，按前缀「{prefix}」兜底："
+                                 f"读到的是「{target.name.strip()}」")
+        if target is None and must:
+            self.log_warning(f"没找到按钮「{names[0]}」（BUTTONS[{key}]）")
+        return target
+
     def click_button(self, key, texts=None, after_sleep=0.6, must=True):
         """点一个**按钮**：`labels.BUTTONS[key]` + 全等匹配 + 点真实文本框。
 
@@ -543,22 +567,8 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         注意 `must`：按钮认不出来是否要 `log_warning`。要不要兜底由调用处决定
         （有些页面认不到按钮时可以退回坐标点击，见 weekend.close_activity_detail）。
         """
-        names = labels.BUTTONS[key] if isinstance(key, str) else tuple(key)
-        pool = self._ocr_region() if texts is None else texts
-        target = self.exact_text(pool, names)
-        if target is None and isinstance(key, str) and key in labels.OCR_LOSSY:
-            # 掉字兜底（只给 OCR_LOSSY 里声明过的键）：OCR 把「下一步」读成「下一」时
-            # 全等必然失败，这里按前缀 + 长度上限找，并留一条 warning 便于复盘。
-            prefix, max_len = labels.OCR_LOSSY[key]
-            target = next((t for t in pool
-                           if t.name.strip().startswith(prefix)
-                           and len(t.name.strip()) <= max_len), None)
-            if target is not None:
-                self.log_warning(f"按钮「{names[0]}」可能掉字，按前缀「{prefix}」兜底："
-                                 f"读到的是「{target.name.strip()}」")
+        target = self._button_target(key, texts, must=must)
         if target is None:
-            if must:
-                self.log_warning(f"没找到按钮「{names[0]}」（BUTTONS[{key}]）")
             return False
         self.click_box(target, after_sleep=after_sleep)
         self.log_info(f"点击按钮「{target.name.strip()}」")
@@ -571,19 +581,8 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         以前都写成 `click_text_and_expect(self._ocr_region(), "下一步", (...))`，
         那是**包含**匹配；现在统一走 labels.BUTTONS + 全等，掉字时由 OCR_LOSSY 兜底。
         """
-        names = labels.BUTTONS[key] if isinstance(key, str) else tuple(key)
-        pool = self._ocr_region() if texts is None else texts
-        target = self.exact_text(pool, names)
-        if target is None and isinstance(key, str) and key in labels.OCR_LOSSY:
-            prefix, max_len = labels.OCR_LOSSY[key]
-            target = next((t for t in pool
-                           if t.name.strip().startswith(prefix)
-                           and len(t.name.strip()) <= max_len), None)
-            if target is not None:
-                self.log_warning(f"按钮「{names[0]}」可能掉字，按前缀「{prefix}」兜底："
-                                 f"读到的是「{target.name.strip()}」")
+        target = self._button_target(key, texts, must=True)
         if target is None:
-            self.log_warning(f"没找到按钮「{names[0]}」（BUTTONS[{key}]）")
             return False
         return self.click_and_expect(int(target.x + target.width / 2),
                                      int(target.y + target.height / 2),

@@ -133,6 +133,10 @@ FLOW = [
          "**默认 0 = 不限制**（用户 2026-11-04 口径：「2000 步的限制不要了」）。"
          "只给 MCP 的 tick harness（`tools/mcp/training_tick.py`）注入用：填 N 就只跑 N 拍"),
     Spec("空闲等待(秒)", 3, INT, "你动鼠标或敲键盘时脚本立刻停手，等你停手这么多秒后才重新拉起游戏继续挂机（期间绝不抢前台）。0 = 不等（用户操作时也照抢）"),
+    Spec("保存调试存证", True, BOOL,
+         "把 events/unknown/unmark/debug 的截图与 txt 落盘到 logs/<局ID>/，并写 clicks.jsonl。"
+         "**安装包默认关**（源码直跑默认开）：这些文件很占地方（实测约 350 MB/小时），"
+         "玩家侧不需要；真需要排查时在界面上打开。关闭后旧目录仍按「日志保留天数」清理"),
     Spec("日志保留天数", 3, INT,
          "每次开局清一次：删掉这么多天之前的**整局存证目录**（logs/<局ID>/ 与 "
          "logs/mcp/<run_id>/<局ID>/）。存证图很占地方（实测约 350 MB/小时），"
@@ -185,9 +189,25 @@ QUEUE = [
 ALL = TRAINING + WEEKEND + SHOP + GACHA + ARCADE + MATCH + FLOW + QUEUE
 
 
+def _packaged():
+    """安装包运行时 pyappify 会注入 app_version；源码直跑为空/None。"""
+    try:
+        import pyappify
+        return bool(getattr(pyappify, "app_version", "") or "")
+    except Exception:                                # noqa: BLE001
+        return False
+
+
 def build_default_config():
-    """生成 `default_config` 的内容（键 → 默认值）。"""
-    return {s.key: s.default for s in ALL}
+    """生成 `default_config` 的内容（键 → 默认值）。
+
+    唯一的动态默认：安装包里「保存调试存证」默认关（玩家侧不写 350 MB/小时的存证），
+    源码直跑默认开（开发要看存证）。
+    """
+    cfg = {s.key: s.default for s in ALL}
+    if _packaged():
+        cfg["保存调试存证"] = False
+    return cfg
 
 
 def build_config_type():
