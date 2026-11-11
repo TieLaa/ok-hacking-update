@@ -186,8 +186,9 @@ class ShopPlace:
           - 周数读不到时按第 7 周以后处理（OCR 抖一帧不能把采购整拍废掉）。
 
         以下两条口径**不受周数影响**，继续生效：
-          - 「老板的馈赠」必定优先拿（0 元 +50 零用钱，纯赚）——不看余额，
-            OCR 价格读错也照拿；「不买」策略仍是否决开关；
+          - `constants.SHOP_MUST_TAKE` 里的商品必定优先拿（2026-11-08「老板的馈赠」、
+            2026-11-11「大乐透」）——不看周数、不看品质；纯赚档连余额都不看，
+            花钱档要求余额读得到且够价格。「不买」策略仍是否决开关；
           - 苦味/怪味饮料系（带负面或随机效果）一律从候选整体剔除（含免费）。
 
         2026-11-05 用户口径：任何日子都不清空，只按策略买合适的
@@ -202,12 +203,30 @@ class ShopPlace:
         if policy == "不买":
             return None, "策略是只逛不买"
 
-        # 2026-11-08 用户口径：「老板的馈赠」必定优先拿（0 元 +50 零用钱，纯赚）。
-        # 放在免费分支之前、且不看余额（OCR 价格读错也照拿）；「不买」仍是开关。
-        must = [i for i in items if any(m in i["name"] for m in SHOP_MUST_TAKE)]
-        if must:
-            pick = max(must, key=lambda i: -i["y"])
-            return pick, "必定优先拿（老板的馈赠：0 元 +50 零用钱）"
+        # 2026-11-08 / 2026-11-11 用户口径：见到必拿（`constants.SHOP_MUST_TAKE`）
+        # **插在免费分支、周数和品质判断之前**——不看周数、不看品质；余额按表里的
+        # 「要不要看余额」分两档：
+        #   - 纯赚档（老板的馈赠：0 元 +50 零用钱）→ 不看余额，价格读错也照拿；
+        #   - 花钱档（大乐透：60 元换 20~200 零用钱）→ 同样优先，但余额读不到
+        #     或不够价格时不盲买（点不动会撞看门狗，把这一天整店关掉）。
+        # 「商店购买策略 = 不买」这句在上面已经提前返回，仍是否决开关。
+        free_must, paid_must = [], []
+        for i in items:
+            hit = None
+            for word, spec in SHOP_MUST_TAKE.items():
+                if word in i["name"] and (hit is None or len(word) > len(hit[0])):
+                    hit = (word, spec)
+            if hit is None:
+                continue
+            need_money, why = hit[1]
+            i["must_why"] = why
+            if need_money and (money is None or i["price"] > money):
+                continue
+            (paid_must if need_money else free_must).append(i)
+        if free_must or paid_must:
+            # 纯赚的（不花钱）先拿，省下的钱还能再买别的东西；同档多张时取最上面那张
+            pick = max(free_must or paid_must, key=lambda i: -i["y"])
+            return pick, f"必定优先拿（{pick['must_why']}）"
 
         # 0 元商品（红包）：不花零用钱，余额不够、甚至钱读不到时都应该拿。
         free = [i for i in items if i["price"] == 0]
