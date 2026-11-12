@@ -14,7 +14,7 @@ import os
 import re
 import time
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QIcon, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -236,6 +236,12 @@ class MonitorView(QWidget):
         self.vBox.setSpacing(12)
         self.vBox.setAlignment(Qt.AlignTop)
 
+        # 目标分输入防抖：打字停 0.5 秒就落盘，不等失焦（用户 2026-11-11 口径）
+        self._target_timer = QTimer(self)
+        self._target_timer.setSingleShot(True)
+        self._target_timer.setInterval(500)
+        self._target_timer.timeout.connect(self._on_target_edited)
+
         self._build()
 
     # ---------- 构建 ----------
@@ -372,12 +378,19 @@ class MonitorView(QWidget):
     def _on_score_stop(self, checked: bool):
         if self._syncing_extras:
             return
-        if self._edit_target is not None:
-            self._edit_target.setEnabled(checked)
         self.actions.set_score_stop(checked)
+
+    @Slot(str)
+    def _on_target_typed(self, _text: str):
+        """用户正在打字：防抖 0.5 秒后落盘，不必等输入框失焦。"""
+        if self._syncing_extras:
+            return
+        self._target_timer.start()
 
     @Slot()
     def _on_target_edited(self):
+        if self._target_timer.isActive():
+            self._target_timer.stop()
         if self._syncing_extras or self._edit_target is None:
             return
         text = self._edit_target.text().strip()
@@ -570,6 +583,11 @@ class MonitorView(QWidget):
             combo.addItem(f"── {style} ──", userData=GROUP)
             for name in names:
                 combo.addItem(name, userData=name)
+        # 默认禁用：勾选框默认不勾，此时下拉不该可选 —— 否则页面刚出来
+        # （第一次 update_data 之前）选一下就把「指定队长」写进去了，
+        # 界面上勾选框却还是未勾，配置和显示对不上。
+        # 真正状态由 `_sync_captain` 按配置回填。
+        combo.setEnabled(False)
         self._captain_combo = combo
         lay.addWidget(combo)
 
@@ -623,6 +641,7 @@ class MonitorView(QWidget):
             self._edit_target.setClearButtonEnabled(True)
             self._edit_target.setValidator(QIntValidator(0, 99999))
             self._edit_target.setToolTip("训练评分达到这个数就停止（勾选「刷到目标分」后生效）")
+            self._edit_target.textEdited.connect(self._on_target_typed)
             self._edit_target.editingFinished.connect(self._on_target_edited)
             lay.addWidget(self._edit_target)
 
@@ -765,8 +784,9 @@ class MonitorView(QWidget):
         没勾选时下拉显示 `memory`（`队长下拉选择`，上次选过的人）——
         这是落盘的界面记忆，否则重启后一下拉就是「── 训练流 ──」分组标题
         （2026-11-09 用户口径：下拉菜单也要启动装载）。
-        旧版勾选框默认是勾上的，回填要等第一次 `update_data` 才发生；
-        在那之前用户点「启动」，勾选状态会被误当成「有队长」。
+
+        运行中不锁：本局用内存里的 `_style` / `_queue`，改这里只影响下一局
+        （用户 2026-11-11 口径）。
         """
         combo, check = self._captain_combo, self._captain_check
         if combo is None or check is None:
@@ -988,8 +1008,8 @@ class MonitorView(QWidget):
                 checked = bool(data.get("score_stop"))
                 if self._check_score_stop.isChecked() != checked:
                     self._check_score_stop.setChecked(checked)
-                if self._edit_target is not None:
-                    self._edit_target.setEnabled(checked)
+                # 目标分输入框**始终可编辑**（用户 2026-11-11 口径）：
+                # 它是落盘配置，允许「先填分后勾刷分」；勾选后才参与判定。
             if (self._edit_target is not None and "score_target" in data
                     and not self._edit_target.hasFocus()):
                 text = str(data.get("score_target") or "")

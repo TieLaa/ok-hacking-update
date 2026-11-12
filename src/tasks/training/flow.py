@@ -447,6 +447,7 @@ class TrainingFlowMixin:
         self._shop_try_key = None
         self._shop_try_count = 0
         self._shop_seen = False
+        self._shop_unmark_seen = set()      # 未登记商品一局只存一次样本
         self._arcade_wait_since = 0.0
         self._no_change = 0
         self._sig_after_click = None
@@ -550,10 +551,46 @@ class TrainingFlowMixin:
             self._launch_queue = None
             return None
         self._queue = queue
-        self.log_info(f"多角色队列（本次运行参数）：{queue.summary()}")
+        if len(queue.items) == 1:
+            item = queue.items[0]
+            target = item.get("target")
+            self.log_info(f"刷分队列：{item['name']} → "
+                          f"{target if target else '一直刷到手动停止'}")
+        else:
+            self.log_info(f"多角色队列（本次运行参数）：{queue.summary()}")
         self.log_info(f"当前队长：{queue.captain}｜位置 {queue.position}"
                       f"｜目标 {queue.target}｜已跑 {len(queue.runs_for())} 局")
         return queue
+
+    def adopt_calendar_captain(self, name):
+        """接手局认出队长 → 勾了「刷到目标分」时记下队长并补建队列。
+
+        用户 2026-11-11 口径：不指定队长 = 接手一局没打完的训练；
+        勾了「刷到目标分」就应该接到这个人身上继续练到分停。
+        日历认出名字后（`handlers/training.handle_training_plan` 或
+        `daycycle.resolve_style_by_calendar_name`）调这里：
+
+        - 只在**接管模式**（配置里没有队长）生效 —— 用户自己指定过队长时
+          日历根本不会识别（`style_known` 已定），这里也不抢；
+        - 只在**勾了刷到目标分**时写配置 —— 没勾就跑完当前这局结束，
+          没必要把「不指定队长」变成「指定队长」（下次还想接手）；
+        - 写完立刻 `init_captain_queue()`：`captain_queue_spec()` 现在能派生
+          `"队长:目标分"`，这一局结束就有队列可记分、未达标继续同一个人。
+        """
+        name = (name or "").strip()
+        if not name:
+            return False
+        if (self.config.get("指定队长") or "").strip():
+            return False
+        if not self.config.get("刷到目标分"):
+            return False
+        self.config["指定队长"] = name
+        self.config["队长下拉选择"] = name
+        self.init_captain_queue()
+        target = int(self.config.get("目标分") or 0)
+        self.log_info(f"接手局：日历认出队长「{name}」→ 已写入指定队长，"
+                      f"随后练到 {target} 分（未填则一直练）", notify=True)
+        return True
 
     def note_run_score(self, texts):
         """在「恭喜获得 / 训练奖励」页读**这一局要判定的球员评分**（每局只记第一次）。
@@ -588,6 +625,12 @@ class TrainingFlowMixin:
         queue = getattr(self, "_queue", None)
         if queue is None:
             return False                       # 单队长模式：跑完就结束
+        # 用户 2026-11-11 口径：一局结束读一次「刷到目标分」——
+        # 中途取消 = 这局跑完就停，不再开新局。只在结束判定读，不碰开局。
+        if not self.config.get("刷到目标分"):
+            self.log_info("「刷到目标分」已取消 → 跑完这局就停，不再开新局", notify=True)
+            self._queue = None
+            return False
         captain = queue.captain
         score = getattr(self, "_run_score", None)
         met = queue.record(score)
@@ -597,6 +640,25 @@ class TrainingFlowMixin:
         if queue.finished:
             self.log_info(self.queue_finished_message(queue), notify=True)
             return False
+        # 用户 2026-11-11 口径：界面派生的单队长队列，局末按**界面当前值**
+        # 重算下一局刷谁 —— 中途换队长/改目标分，本局不变，下一局就换。
+        # MCP/CLI 注入的队列（`_launch_queue`）走队列自己的推进，不读界面。
+        if not getattr(self, "_launch_queue", None):
+            current = (self.config.get("指定队长") or "").strip()
+            target = int(self.config.get("目标分") or 0)
+            if not current:
+                self.log_info("「指定队长」已取消 → 跑完这局就停，不再开新局", notify=True)
+                self._queue = None
+                return False
+            if current != queue.captain or target != (queue.target or 0):
+                self.log_info(f"界面改了队长/目标分 → 下一局改刷「{current}」"
+                              f"（目标 {target or '未填'}）", notify=True)
+                self.init_captain_queue()
+                queue = getattr(self, "_queue", None)
+                if queue is None or queue.empty:
+                    return False
+                self.switch_captain(queue.captain)
+                return True
         self.switch_captain(queue.captain)
         return True
 
@@ -1106,14 +1168,14 @@ class TrainingFlowMixin:
         self.log_info(f"流派：{style}（配置指定队长「{name}」，跳过日历）")
         return True
 
-    def weekend_priority(self, day=None, st=None):
+    def weekend_priority(self, day=None, st=None, texts=None):
         """今天该去的地点（有序）。
 
         **判断已搬到 `training/places/map.py`**（地图 = 决策模块）：
-        行程表、扭蛋流的「先抽扭蛋再打工」、两个开关过滤都在那里。
+        训练流按缺口选动作、扭蛋流的「先抽扭蛋再打工」、两个开关过滤都在那里。
         这里保留旧名，让现有调用点不用改。
         """
-        return self.today_places(day, st)
+        return self.today_places(day, st, texts)
 
     def rest_threshold(self, day=None):
         """今天「精力低于多少就休息」。

@@ -231,19 +231,27 @@ class TalentHandlers:
     # ==================== 钓鱼（天赋「钓鱼」：真崎辉世 / 佐久间雨乃） ====================
 
     GROUND_NAMES = ("家门口的小溪", "普通的钓鱼场", "专业的钓鱼场")
+    # 三张卡的价格左→右递增，实测两局都是 0 / 10 / 20（2026-10-30、2026-11-12）。
+    # 只在 OCR 读不到价格时兜底；读到了就用真值。
+    GROUND_PRICES = (0, 10, 20)
 
     def handle_fishing_ground(self, texts):
-        """钓鱼场三选一：选最贵的（最右），再点「确定」。
+        """钓鱼场三选一：挑**买得起的最贵**那张，再点「确定」。
 
         2026-10-30 用户实机截图（第1周 星期四，79/130，零用钱 120）：
         「请选择1个钓鱼场」——家门口的小溪（0）/ 普通的钓鱼场（10）/
         专业的钓鱼场（20）。用户口径：**尽量选高价格的**。
 
         价格那三个数字（0/10/20）OCR **读不到**：实测整页只认出三张卡的标题、
-        说明和「确定」（logs/debug/1030-152606_nochange3/ocr.txt）。所以先按
-        位置取最右那张——三张卡的价格就是左→右递增，最右 = 最贵；偶尔价格
-        能读到（2026-10-30 15:31 那帧读到「20」@(1152,584)），能读到两个以上
-        就按价格挑最贵的。
+        说明和「确定」（logs/debug/1030-152606_nochange3/ocr.txt）。所以旧版
+        按位置取最右那张——三张卡的价格左→右递增，最右 = 最贵。
+
+        2026-11-12 卡死（logs/1112-001437_真崎辉世/debug/1112-001819_recover_failed）：
+        第 1 周零用钱只有 10，旧逻辑永远选最右「专业的钓鱼场」（20 币）→
+        点「确定」游戏不理（钱不够、价格显示红色）→ 同一页无限重试，
+        最后靠 noresp3s 看门狗兜。现在先读顶栏零用钱，**买不起就降一档**：
+        价格读到了用真值，读不到按 GROUND_PRICES 兜底，从右往左挑第一张
+        买得起的。零用钱也读不到时保持旧行为（最右）。
 
         旧版没有这个 handler：界面落到「没见过 → 点一下继续」，连点 3 次
         没变化后任务卡死（logs/debug/1030-152608_nochange3）。
@@ -252,35 +260,56 @@ class TalentHandlers:
         if self.exact_text(texts, ("请选择1个钓鱼场",)) is None and len(cards) < 2:
             return False
 
+        money = self.read_money(texts)
+
+        def center_x(t):
+            return t.x + t.width / 2
+
         if cards:
             cards.sort(key=lambda t: t.x)
-            target = cards[-1]
-            label = target.name.strip()
-            pcx = None
-            prices = []
+            # 价格与卡片按中心横坐标配对（列间距 0.134w，阈值 0.08w）
+            readings = {}
             for t in texts:
                 s = t.name.strip()
                 if not s.isdigit():
                     continue
                 cy = (t.y + t.height / 2) / self.height
-                if 0.55 <= cy <= 0.76:
-                    prices.append((int(s), t))
-            if len(prices) >= 2:
-                price, pbox = max(prices, key=lambda p: p[0])
-                pcx = pbox.x + pbox.width / 2
-                target = min(cards, key=lambda c: abs(
-                    (c.x + c.width / 2) - pcx))
-                label = f"{target.name.strip()}（{price} 币）"
-            x = int(target.x + target.width / 2)
+                if not 0.55 <= cy <= 0.76:
+                    continue
+                idx = min(range(len(cards)),
+                          key=lambda i: abs(center_x(cards[i]) - center_x(t)))
+                if abs(center_x(cards[idx]) - center_x(t)) <= self.width * 0.08:
+                    readings[idx] = int(s)
+
+            def price_of(i):
+                if i in readings:
+                    return readings[i]
+                if len(cards) == len(self.GROUND_PRICES):
+                    return self.GROUND_PRICES[i]
+                return None
+
+            pick_i = len(cards) - 1
+            if money is not None:
+                for i in range(len(cards) - 1, -1, -1):
+                    price = price_of(i)
+                    if price is not None and price <= money:
+                        pick_i = i
+                        break
+            target = cards[pick_i]
+            label = target.name.strip()
+            x = int(center_x(target))
             # 点卡片中部而不是标题：标题贴着卡片上沿，点在边缘可能选不中
             y = int(target.y + target.height / 2 + self.height * 0.12)
+            price = readings.get(pick_i)
         else:
             label = "最右卡（卡名没认出）"
+            price = None
             x, y = int(self.width * 0.81), int(self.height * 0.45)
 
         self.click(x, y, after_sleep=0.45)
-        self.log_info(f"钓鱼场：选最贵的「{label}」"
-                      "（价格读不到时按左→右递增取最右）")
+        self.log_info(f"钓鱼场：零用钱 {money}｜选「{label}」"
+                      + (f"（{price} 币）" if price is not None else "")
+                      + "（买不起最贵就降档）")
         if not self.click_button("confirm", after_sleep=0.9, must=False):
             self.click(int(self.width * 0.5), int(self.height * 0.885),
                        after_sleep=0.9)

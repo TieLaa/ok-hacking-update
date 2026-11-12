@@ -66,7 +66,7 @@ DEFAULT_LAYOUT = {
             {"id": "today", "title": "今日计划", "rows": [
                 ["比赛倒计时", "{match_countdown}"],
                 ["周末去处", "{weekend_plan}"],
-                ["野餐阈值", "精力 < {picnic_threshold}"],
+                ["野餐阈值", "缺口 ≥ {picnic_threshold}"],
             ]},
             {"id": "shop", "title": "商店", "rows": [
                 ["商店购买策略", "{buy_strategy}"],
@@ -509,18 +509,24 @@ class MonitorTab(CustomTab):
             task._launch_queue = None
             logger.info("监控页：界面指定队长 → 本次注入的多角色队列参数已作废")
         if not value:
-            # 取消勾选队长 = 无队长模式，顺带关掉「刷到目标分」（落盘的设置也改掉）
+            # 取消勾选队长 = 无队长模式（接手一局没打完的训练）。
+            # 用户 2026-11-11 口径：「刷到目标分」**保留** —— 勾了就是
+            # 「接手后按日历认出来的队长继续练到分停」，取消队长不能把
+            # 这个设置吃掉；没勾的话本来就跑完这局就停。
             if task.config.get("刷到目标分"):
-                task.config["刷到目标分"] = False
-                logger.info("监控页：取消指定队长 → 「刷到目标分」一并关闭")
-                # 勾选框会自己变灰/取消，不解释一句用户会以为「界面把我的设置吃了」
-                self._notify("已取消指定队长：没有队长就没法刷分，「刷到目标分」一并关闭")
-            reset = getattr(task, "reset_style", None)
-            if callable(reset):
-                try:
-                    reset()
-                except Exception as e:  # noqa: BLE001
-                    logger.error(f"重置流派失败: {e}")
+                logger.info("监控页：取消指定队长 → 「刷到目标分」保留"
+                            "（接手后按日历认到的队长生效）")
+                self._notify("已取消指定队长：刷分设置保留，接手后按日历认出的队长继续")
+            # 运行中**不清流派**：本局的队长/流派已经在内存里（`_style` / `_queue`），
+            # 清掉会让剩下这一局按「训练流」跑。下一局开头
+            # `resolve_style_by_config()` 会按新配置重新定（用户 2026-11-11 口径）。
+            if not getattr(task, "running", False):
+                reset = getattr(task, "reset_style", None)
+                if callable(reset):
+                    try:
+                        reset()
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(f"重置流派失败: {e}")
         self._update_data()
 
     @staticmethod
@@ -601,17 +607,17 @@ class MonitorTab(CustomTab):
     def set_score_stop(self, enabled: bool):
         """勾选「刷到目标分」：写配置键 `刷到目标分`（Config 自动存盘）。
 
-        **先勾后填也允许**（2026-11-07 口径，修复「先有鸡还是先有蛋」死锁）：
-        勾上只要求**已指定队长**；目标分可以之后填 —— 输入框一填数字
+        **先勾后填也允许**：目标分可以之后填 —— 输入框一填数字
         （editingFinished）就写 `目标分`（set_score_target）。
 
-        - 勾上：队长必填（没有就拒绝 —— 队列空了会静默降级成单队长模式）；
-          目标分暂时为空 → 派生 `"队长"`（无目标），该角色按未达标一直刷，
-          填入分数后下一次 run 自动按目标判定。
-        - 取消勾选：`刷到目标分=False`，恢复「跑完一局就结束」的老行为。
+        - 勾上：有队长 → 下次开局按 `"队长:目标分"` 建队列；
+          没队长（接手模式）→ 允许先勾，日历认出队长后由
+          `flow.adopt_calendar_captain` 写回队长再生效。
+        - 取消勾选：`刷到目标分=False`，一局结束判定时读到就停
+          （本局跑完，不再开新局）。
 
-        重启后勾选状态原样回来（用户在 2026-11-09 明确要求落盘）。
-        换队长不动这两个键 —— 队列是派生值，下次 run 自然按新队长重算。
+        **本局已开始才勾**：界面只提示「下次【开始】生效」，不偷偷补建队列
+        （用户 2026-11-11 口径：开始/停止的语义不动，界面只做监控和提示）。
         """
         task = self._task()
         if task is None:
@@ -621,19 +627,34 @@ class MonitorTab(CustomTab):
             if task.config.get("刷到目标分"):
                 task.config["刷到目标分"] = False
                 logger.info("监控页：刷到目标分 → 关（跑完一局就结束；设置已保存）")
+                if getattr(task, "running", False):
+                    self._notify("已关闭「刷到目标分」：本局跑完就停，不再开新局")
             self._update_data()
             return
         captain = (task.config.get("指定队长") or "").strip()
         target = self._read_target(task)
         if not captain:
-            logger.warning("监控页：勾「刷到目标分」失败 —— 请先在左侧指定队长")
-            self._notify("勾选「刷到目标分」失败：请先在左侧指定队长", error=True)
-            self.notify_stop_check()
+            # 接手模式（不指定队长 = 接着跑一局没打完的训练）：
+            # 允许先勾，等局内日历认出队长后由 `adopt_calendar_captain` 写回。
+            if target and int(task.config.get("目标分") or 0) != target:
+                task.config["目标分"] = target
+            task.config["刷到目标分"] = True
+            logger.info("监控页：刷到目标分 → 开（接手模式：等日历认出队长后生效）")
+            self._notify("已开启「刷到目标分」：接手局跑起来、"
+                         "日历认出队长后自动按他刷分")
+            self._update_data()
             return
         if target and int(task.config.get("目标分") or 0) != target:
             task.config["目标分"] = target
         task.config["刷到目标分"] = True
-        if target:
+        # 本局已开始且没有队列（开局前没勾）→ 只能下次开始生效；
+        # 不在这里补建（那是开始/停止的语义，界面不碰）。
+        running_without_queue = (getattr(task, "running", False)
+                                 and not getattr(task, "_queue", None))
+        if running_without_queue:
+            logger.info("监控页：刷到目标分 → 开（本局已开始，下次 run 生效）")
+            self._notify("已开启「刷到目标分」：本局已开始，刷分从下次【开始】生效")
+        elif target:
             logger.info(f"监控页：刷到目标分 → 开（{captain} 刷到 {target} 分后停止；设置已保存）")
         else:
             logger.warning(f"监控页：刷到目标分 → 开（{captain}，目标分未填 —— "
@@ -682,15 +703,6 @@ class MonitorTab(CustomTab):
             (alert_error if error else alert_info)(message)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"界面提示发送失败（只写日志）: {e}")
-
-    def notify_stop_check(self):
-        """校验失败把勾选框弹回去（view 层按 config 回填，这里强制刷一次）。"""
-        view = getattr(self, "_view", None)
-        if view is not None:
-            task = self._task()
-            view._syncing_extras = False
-            view._sync_extras({"score_stop": bool(task.config.get("刷到目标分"))
-                               if task else False})
 
     def set_stamina_allowed(self, allowed: bool):
         """「允许吃专注药」：映射到 `自动恢复精力`。

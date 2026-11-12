@@ -214,10 +214,33 @@ class WeekendHandlers:
         policy = self.config.get("商店购买策略")
         money = self.read_money(texts)
         items = self.shop_items(texts)
+        # 商品卡不显示效果：逐张点选读右侧详情（只选中、不花钱），
+        # 把「类别」从图鉴表换成游戏自己给的效果文案（2026-11-12）。
+        self.read_shop_details(items, money)
         bar = self.top_bar(texts)
         self.log_info("商店：" + "、".join(
             f"{i['name']}({i['price']}/{i['quality']})" for i in items)
             + f"｜零用钱 {money}｜策略 {policy}")
+
+        # 未登记商品：按品质色兜底的同时留一份 unmark 样本（一局每个名字只存一次），
+        # 人工看 json/txt 就能往 `constants.SHOP_ITEMS` 补一行。
+        fresh = [i for i in items if not self.shop_known(i["name"])]
+        seen = getattr(self, "_shop_unmark_seen", None)
+        if seen is None:
+            seen = self._shop_unmark_seen = set()
+        fresh = [i for i in fresh if i["name"] not in seen]
+        if fresh:
+            seen.update(i["name"] for i in fresh)
+            self.log_info("商店：未登记商品 " + "、".join(
+                "%s(%s/%s)" % (i["name"], i["price"], i["quality"])
+                for i in fresh))
+            if hasattr(self, "dump_unmark"):
+                self.dump_unmark(
+                    texts, "shop_item",
+                    cards=[{"name": i["name"], "price": i["price"],
+                            "quality": i["quality"],
+                            "detail": i.get("detail")} for i in fresh],
+                    note="商店未登记商品")
 
         pick, reason = self.pick_shop_item(
             items, money, policy, stamina=bar.get("stamina"),
@@ -246,6 +269,86 @@ class WeekendHandlers:
             self.click_box(confirm, after_sleep=0.6)
             self.log_info("商店：确认购买")
         return True
+
+    # 右侧详情面板（书页）：x1, y1, x2, y2（画面比例）。
+    # 实测 1920x1080（docs/shots/2026-10-26-shop.png）：标题 y≈0.246、
+    # 效果文本 y≈0.58；下界避开数量选择器/购买条（就算读到纯数字也会被滤掉）。
+    SHOP_DETAIL_REGION = (0.55, 0.12, 0.90, 0.72)
+
+    def read_shop_details(self, items, money):
+        """逐张点选商品卡 → 读右侧详情，把效果文本/类别挂到 item 上。
+
+        2026-11-12 用户口径：商品卡只有名字/价格/品质色，**效果在右侧详情**；
+        靠 `SHOP_ITEMS` 推类别要求图鉴点亮，而每个账号点亮进度不同。
+        选中不花钱（购买是右下黄色条），一天最多 6 件。
+
+        只看值得看的：买不起的、明确蓝/白的跳过（点它们纯浪费）。
+        同一局内按名字缓存 —— 买完一件下一拍重新 OCR 时不再重复点。
+        """
+        cache = getattr(self, "_shop_detail_cache", None)
+        if cache is None:
+            cache = self._shop_detail_cache = {}
+        for item in items:
+            if item["price"] == 0:
+                continue                        # 0 元（红包）直接买，不用看详情
+            # 未登记商品**一律读详情**（不管买不买得起）：详情文本会进
+            # `unmark/shop_item` 样本，之后补 `SHOP_ITEMS` 不用再回头截图。
+            if self.shop_known(item["name"]):
+                if money is not None and item["price"] > money:
+                    continue
+                if item.get("quality") in self.SHOP_SKIP_QUALITIES:
+                    continue
+            name = item["name"]
+            if name in cache:
+                detail = cache[name]            # None = 上次就没读到，别重复点
+                if detail is None:
+                    continue
+            else:
+                detail = self.probe_shop_detail(item)
+                cache[name] = detail
+                if detail is None:
+                    continue                    # 读不到 → 退回名字表/前缀
+            item["detail"] = detail
+            item["detail_category"] = self.parse_shop_detail(detail)
+            item["stamina_amount"] = self.parse_shop_stamina(detail)
+            self.log_info(f"商店：详情「{name}」→ {detail[:40]}"
+                          f"（{item['detail_category'] or '认不出'}）")
+
+    def probe_shop_detail(self, item):
+        """点一下卡片（只选中），读右侧详情面板的效果文本；读不到 None。
+
+        **必须校验标题**：售罄卡点不动时右侧还停在上一个商品，不校验就会把
+        上一件的效果安到这一件头上（商店列表里「剩余」不参与解析）。
+        """
+        self.click(item["x"], item["y"], after_sleep=0.25)
+        texts = self._ocr_region(box=self.box_of_screen(*self.SHOP_DETAIL_REGION))
+        if not texts:
+            return None
+        name = item["name"]
+        title = None
+        for t in texts:
+            s = (t.name or "").strip()
+            if s and (s == name or name in s or s in name):
+                title = s
+                break
+        if title is None:
+            self.log_debug(f"商店：点「{name}」后详情标题对不上 → 不采信")
+            return None
+        parts = []
+        for t in texts:
+            s = (t.name or "").strip()
+            if not s or s == title or s.isdigit() or len(s) < 2:
+                continue
+            parts.append(s)
+        detail = "".join(parts)
+        # 卫生检查：详情区只有一句效果文案。混进「商店/上新时间/剩余/出行」
+        # 说明这块区域不是详情面板（或 OCR 没按区域裁剪、拿到整帧），
+        # 宁可退回名字表，也不要把整页文本当效果（假阳性会改错类别）。
+        if not detail or len(detail) > 40 or any(
+                w in detail for w in ("商店", "上新时间", "剩余", "出行")):
+            self.log_debug(f"商店：详情文本不像效果文案 → 不采信：{detail[:60]}")
+            return None
+        return detail
 
     def finish_shop(self, texts=None):
         """关店。一天只真进一次由 `_shop_day`（handle_shop 确认商店页后记账）负责。"""
@@ -598,17 +701,18 @@ class WeekendHandlers:
     def handle_weekend(self, texts):
         """出行地图（周末 + 训练日的额外出行）：去今天该去的地点。
 
-        用户 2026-10-29 / 2026-11-10 口径（见 constants.WEEKEND_PLAN /
-        WEEKEND_MAIN_PLACE）：
-        - 周六：训练流原设定（步行街 → 游戏厅 → 公园）；商店流去餐厅打工；
-        - 周日：训练流→公园、商店流→餐厅；
+        用户 2026-10-29 / 2026-11-10 / 2026-11-11 口径
+        （见 constants.WEEKEND_PLAN / WEEKEND_MAIN_PLACE 和
+        `places/map.py: training_weekend_places`）：
+        - **训练流**：按精力缺口选动作 ——
+          缺口 ≥ 周末划船缺口（30）→ 公园（缺口 ≥ 周末野餐阈值 70 野餐，
+          否则划船）；缺口 < 30 → 餐厅打工（零用钱留给商店的牛奶/秘籍，
+          不去步行街/游戏厅）；缺口读不到 → 回退「餐厅 → 公园」；
+        - **商店流**：周六/周日去餐厅打工；
         - **扭蛋流 / 小游戏流**：候选固定「主地点 + 餐厅」，**与星期无关**
           （2026-11-10：训练日的额外出行日也走同一条门槛）——
           零用钱 ≥ 360 → 主地点，< 360 → 餐厅打工，队友和标签都不参与
           （`places/map.py: prefer_venue`）。
-        `允许进步行街 / 允许进游戏厅` 没开时对应地点会被过滤掉；
-        两个都关掉时按**体力缺口**（上限−当前 > 60 → 公园，否则餐厅）二选一，
-        零花钱不参与判断（2026-11-10 用户口径：训练流精力优先）。
         """
         # 周末首页有「出行」大按钮，地图上没有（2026-10-27 核对 run2 地图页三帧 OCR：
         # 地图只有「公园/公园+」「游戏厅/属性+」「步行街/零用钱+」，无「出行」）。
@@ -626,8 +730,9 @@ class WeekendHandlers:
         visited = st.setdefault("visited", set())
         day = st["date"][1] if st["date"] else None
 
-        # 今天去哪几个地点：**判断在 `training/places/map.py`**（决策模块）
-        places = self.today_places(day, st)
+        # 今天去哪几个地点：**判断在 `training/places/map.py`**（决策模块）。
+        # 训练流要读当前精力/零用钱算缺口，所以把 texts 一起传进去。
+        places = self.today_places(day, st, texts)
 
         # 今天已经去过的地方不再进：游戏厅没有可跳过的小游戏时会退回地图，
         # 不记录「已去过」就会来回进出游戏厅（2026-10-26 实训）。

@@ -185,6 +185,9 @@ class TrainingHandlers:
         if style:
             self._style = style
             self._style_name = name
+            # 接手 + 勾了「刷到目标分」：写回指定队长并补建队列
+            # （flow.adopt_calendar_captain）
+            self.adopt_calendar_captain(name)
             self.log_info(f"训练计划：队长「{name}」→ 流派「{style}」", notify=True)
         elif name:
             # 名字看着像人名但角色表里没有（SR/R 卡没收录 / OCR 认错）：

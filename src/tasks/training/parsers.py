@@ -661,8 +661,12 @@ class TrainingParsersMixin:
 
         band_y1 = y1 + int((y2 - y1) * 0.45)
         band_y2 = y2 - int((y2 - y1) * 0.15)
-        strips = [frame[band_y1:band_y2, x1 + 4:x1 + 16],
-                  frame[band_y1:band_y2, x2 - 16:x2 - 4]]
+        # 2026-11-12：取样点往里收 —— 选中的卡片有一圈亮黄高亮框，旧版从
+        # x1+4 起取，高亮色会被算进中位数：同一件「器材指导教程+」在一帧
+        # 判「其他」、下一帧判「金」（logs/run.log 00:51:41 vs 00:52:28）。
+        inset = max(6, int(w * 0.006))
+        strips = [frame[band_y1:band_y2, x1 + inset:x1 + inset + 12],
+                  frame[band_y1:band_y2, x2 - inset - 12:x2 - inset]]
         pixels = [s.reshape(-1, 3) for s in strips if s.size]
         if not pixels:
             return "其他", -1, -1
@@ -1641,9 +1645,12 @@ class TrainingParsersMixin:
         """把科目预览帧存一份（限流），用于事后校准金框/彩框。
 
         为什么要它：2026-10-29 用户两次说「黄框/彩框没识别到」，但事后没有帧，
-        只能靠猜。这里每局最多存 12 张，文件名带科目名，复盘时直接量环带占比。
+        只能靠猜。文件名带科目名，复盘时直接量环带占比。
+
+        2026-11-12：上限 12 → 36。12 张只够跑到第 2 周，第 4 周的「彩框+金框」
+        漏识别事故（用户报「连续两天金框都没识别到」）根本没有帧可查。
         """
-        if getattr(self, "_subject_dumps", 0) >= 12:
+        if getattr(self, "_subject_dumps", 0) >= 36:
             return
         frame = self.frame
         if frame is None or not frame.any():
@@ -1953,12 +1960,22 @@ class TrainingParsersMixin:
             ring[:, -t_ring:] = True
             return float((gold & ring).sum()) / max(int(ring.sum()), 1)
 
-        ratio = ring_gold_ratio(target.y + target.height / 2)
-        others = sorted(ring_gold_ratio(s.y + s.height / 2)
-                        for s in subjects if s is not target)
-        baseline = others[len(others) // 2] if others else 0.0
-        # 过绝对门限的行数（用来识别「整页都这个色」的情况）
-        over = [v for v in ([ratio] + others) if v > GOLD_RING_MIN]
+        rows = [target] + [s for s in subjects if s is not target]
+        ratios = [ring_gold_ratio(s.y + s.height / 2) for s in rows]
+        ratio = ratios[0]
+        rest = sorted(ratios[1:])
+        baseline = rest[len(rest) // 2] if rest else 0.0
+        # 过绝对门限的行数（用来识别「整页都这个色」的情况）。
+        # 2026-11-12：**彩框行不算金框证据** —— 彩虹边缘本身含一段橙黄，
+        # 一屏「1 个彩框 + 2 个金框」正好凑够 6//2 = 3 行，会被 page_wide
+        # 判成「整页偏色」，结果所有金框全灭（用户报：第 4 周星期三、星期四
+        # 连续两天同时有彩框金框，金框一个都没识别到）。
+        crit_idx = {
+            i for i, s in enumerate(rows)
+            if self.has_crit_border(texts, subject=s.name.strip(), quiet=True)
+        }
+        over = [v for i, v in enumerate(ratios)
+                if v > GOLD_RING_MIN and i not in crit_idx]
         # 2026-11-02 改判据：主判据改成**绝对门限 + 颜色**（见 GOLD_PIX_* 注释）。
         # 「2 倍基线」这条相对判据降级成**兜底**：只有当整页大多数科目行都同时
         # 过了绝对门限时，才认为这是「界面本身就这样」（例如度假页橙黄按钮），

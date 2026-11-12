@@ -15,15 +15,17 @@
 
 （服务员打工 −25 精力，登记在 `places/restaurant.py`。）
 
-选哪个（用户 2026-10-30 / 2026-11-01 / 2026-11-08）：
+选哪个（用户 2026-10-30 / 2026-11-01 / 2026-11-08 / 2026-11-11）：
 
-- **队友优先**（2026-11-08 用户口径，和餐厅「桌游GM 多两个就选左边」同一口径）：
-  **划船的队友比野餐多 `MATE_MARGIN`（2）个及以上 → 优先划船**，不分流派、
-  也不看精力（周六/周日的默认规则都要让位）。多 1 个不算，仍然是默认规则说了算。
-  只在**默认选到野餐**时才由队友改判 —— 配置里明确要「散步」的照旧散步。
-- **训练流**：周六 → 划船（属性+，不再满精力吃野餐）；
-  周日 → 精力 < `周末野餐阈值` 就野餐补精力，否则划船。
-  今天选过一次就记住（`park_choice`），不反复改。
+- **训练流（2026-11-11 起）**：按**精力缺口**选，队友不参与 ——
+  缺口（上限−当前）≥ `周末野餐阈值`（默认 70）→ 野餐；
+  缺口 < 70 → 划船（属性+）。划船比野餐少回的精力拿去训练，
+  收益高于划船那点属性，所以缺口大时野餐优先，不被「划船队友多 2」改走。
+  缺口读不到时才回退旧行为（周六划船 / 周日看精力）。
+- **其它流派：队友优先**（2026-11-08 用户口径，和餐厅「桌游GM 多两个就选左边」同一口径）：
+  **划船的队友比野餐多 `MATE_MARGIN`（2）个及以上 → 优先划船**，不看精力。
+  多 1 个不算，仍然是默认规则说了算。只在**默认选到野餐**时才由队友改判 ——
+  配置里明确要「散步」的照旧散步。
 - **其它流派**：用配置项 `公园选项` 指定的优先项（默认野餐）。
 
 队友数怎么数：公园三个圆形图标头顶的「深蓝胶囊 + chibi 头像」和餐厅两卡**是同一套**
@@ -46,6 +48,7 @@
     所以：标题只当**判据**，实际点击永远走选项文字框。
 """
 
+from src.tasks.training.constants import WEEKEND_PICNIC_FALLBACK
 from src.tasks.ui import labels
 
 # 地点名（地图上的按钮文字 / 状态里的键）
@@ -87,11 +90,28 @@ class ParkPlace:
         return (pick,) + tuple(x for x in labels.PARK_OPTIONS if x != pick)
 
     def park_pick(self, texts, style, day=None):
-        """今天选哪个选项（选项名）。优先级见模块 docstring：
+        """今天选哪个选项（选项名）。
 
-        默认选到**野餐**时，若**划船队友 − 野餐队友 ≥ `MATE_MARGIN`** → 改选划船
-        （不分流派、不看精力）；其余情况按「周六划船 / 周日看精力 / 配置项 `公园选项`」。
+        2026-11-11 用户口径：**训练流按缺口选**，队友改判不再抢野餐 ——
+        划船比野餐少回的精力拿去训练，收益高于划船那点属性：
+
+            缺口（上限−当前）≥ 周末野餐阈值（默认 70） → 野餐
+            缺口 < 周末野餐阈值                          → 划船
+
+        其它流派保持 2026-11-08 的「划船队友多 2 个 → 划船」。
         """
+        if style == "训练流":
+            gap = self.weekend_gap(texts)
+            if gap is not None:
+                threshold = int(self.config.get("周末野餐阈值"))
+                if gap >= threshold:
+                    self.log_info(f"公园：缺口 {gap} ≥ {threshold} → 野餐补精力")
+                    return "野餐"
+                self.log_info(f"公园：缺口 {gap} < {threshold} → 划船（属性+）")
+                return "划船"
+            # 缺口读不到：回退旧行为（周六划船 / 周日看精力）
+            return self.park_default_pick(texts, style, day)
+
         pick = self.park_default_pick(texts, style, day)
         if pick != "野餐":
             return pick
@@ -109,7 +129,7 @@ class ParkPlace:
         return "划船"
 
     def park_default_pick(self, texts, style, day=None):
-        """不看队友时的默认选项：训练流「周六划船 / 周日看精力」，其它流派用配置项。"""
+        """缺口读不到时的旧回退：训练流「周六划船 / 周日看精力」，其它流派用配置项。"""
         if style != "训练流":
             return self.config.get("公园选项")
 
@@ -118,7 +138,9 @@ class ParkPlace:
         if st.get("park_choice") is None:
             if day == "日":
                 stamina = self.top_bar(texts).get("stamina")
-                threshold = int(self.config.get("周末野餐阈值"))
+                # 只在「缺口」读不到时兜底；周末野餐阈值现在表示缺口，
+                # 不能拿它当精力阈值用，所以这里用旧的固定 60。
+                threshold = WEEKEND_PICNIC_FALLBACK
                 if stamina is not None and stamina < threshold:
                     st["park_choice"] = "野餐"
                     self.log_info(f"周日精力 {stamina} < {threshold} → 野餐补精力")

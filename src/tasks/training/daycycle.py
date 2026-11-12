@@ -433,6 +433,9 @@ class DayCycleMixin:
             return False
         self._style = style
         self._style_name = name
+        # 接手 + 勾了「刷到目标分」：把认出来的队长写回配置并补建队列
+        # （flow.adopt_calendar_captain）
+        self.adopt_calendar_captain(name)
         self.log_info(f"流派：{style}（日历队长「{name}」）")
         return True
 
