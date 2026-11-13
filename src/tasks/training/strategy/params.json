@@ -1,0 +1,7 @@
+{
+  "_doc": "策略参数表：会随打法/版本调整、但不该给玩家改的标量。代码只读；玩家个人偏好仍走 configs/TrainingTask.json（config_spec 声明）。",
+  "_schema_version": 1,
+  "vacation": {
+    "stamina_target": 100
+  }
+}

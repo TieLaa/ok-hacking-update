@@ -20,8 +20,10 @@
 
 from collections import namedtuple
 
+from src.tasks.training import params
 from src.tasks.training.constants import (
-    WEEKEND_MAIN_PLACE, WEEKEND_PARK_GAP, WEEKEND_PLAN, WEEKEND_WORK_MONEY_GATE)
+    PARK_PICNIC_STAMINA, WEEKEND_MAIN_PLACE,
+    WEEKEND_PARK_GAP, WEEKEND_PLAN, WEEKEND_WORK_MONEY_GATE, WORK_STAMINA_COST)
 from src.tasks.ui import labels
 
 # 周末计划的一步：place=地点名，urgent=True=急招临时插队（不是今天的主计划）。
@@ -261,20 +263,97 @@ class MapPlace:
             places = [p for p in places if p != "步行街"]
         main = self.prefer_venue(texts, places, day)
         if not main:
+            steps = []
+        elif main[0] == "餐厅":
+            # 主计划首选就是餐厅 → 不是 detour（商店流 / 钱不够 / 训练流缺口小）。
+            steps = [WeekendStep(p, False) for p in main]
+        elif (not self.venue_has_urgent(texts, "餐厅")
+              or "餐厅" in visited
+              or (self.style == "扭蛋流" and st.get("gacha_spent"))):
+            steps = [WeekendStep(p, False) for p in main]
+        else:
+            self.log_info(f"周末：餐厅有「急招！」→ 插到最前（原首选 {main[0]}）")
+            steps = ([WeekendStep("餐厅", True)]
+                     + [WeekendStep(p, False) for p in main if p != "餐厅"])
+        return self.vacation_eve_guard(steps, texts, st)
+
+    # ---------- 海边前周末：把体力拉回目标（第3周） ----------
+
+    def vacation_eve_target(self, st=None):
+        """第3周周末的体力目标；不是这一周就返回 None。
+
+        用户 2026-11-13 口径：第4周海边合宿第4天是**全队友参与**的训练
+        （玩家等级提升给的增益），体力不够就得休息、错过这一天。
+        所以第3周周日结束时必须 ≥ 目标值（`strategy/params.json`）。
+        """
+        if st is None:
+            st = self.weekend_state()
+        week, day = st.get("date") or (None, None)
+        if week != 3 or day not in ("六", "日"):
+            return None
+        return int(params.get("vacation.stamina_target"))
+
+    def vacation_eve_guard(self, steps, texts, st=None):
+        """第3周周末：体力不够时把打工换成公园，保证周日结束 ≥ 目标。
+
+        算法（划船 +30 / 野餐 +70 / 打工 −25）：
+
+            周六：今天还能靠周日补一次
+                < 目标−70 → 今天必须先补，整天只去公园
+                < 目标−45 → 今天不打工（打工后周日一次野餐也补不回）
+                ≥ 目标−45 → 原计划（打工后周日野餐兜底）
+            周日：今天就是最后一次机会
+                < 目标    → 整天只去公园
+                < 目标+25 → 今天不打工（打完就掉到目标以下）
+                ≥ 目标+25 → 原计划
+
+        体力读不到时不赌：今天只去公园。计划本来为空（地点都去过）时不插手，
+        避免「公园已去过 → 再点一次」打转。
+        """
+        if not steps:
+            return steps
+        if st is None:
+            st = self.weekend_state()
+        target = self.vacation_eve_target(st)
+        if target is None:
+            return steps
+        day = st["date"][1]
+        stamina = self.top_bar(texts).get("stamina")
+        if stamina is None:
+            self.log_info("海边前周末：读不到体力 → 今天只去公园")
+            return self.vacation_eve_park(st)
+        if day == "六":
+            must_recover = target - PARK_PICNIC_STAMINA
+            if stamina < must_recover:
+                self.log_info(
+                    f"海边前周末：周六体力 {stamina} < {must_recover}"
+                    "（周日一次野餐也补不回）→ 今天先去公园")
+                return self.vacation_eve_park(st)
+            floor = target - (PARK_PICNIC_STAMINA - WORK_STAMINA_COST)
+        else:
+            if stamina < target:
+                self.log_info(
+                    f"海边前周末：周日体力 {stamina} < {target} → 今天先补体力")
+                return self.vacation_eve_park(st)
+            floor = target + WORK_STAMINA_COST
+        if stamina < floor:
+            kept = [s for s in steps if s.place != "餐厅"]
+            if not kept:
+                self.log_info(
+                    f"海边前周末：体力 {stamina} < {floor}，打工后到不了"
+                    f" {target} → 改去公园")
+                return self.vacation_eve_park(st)
+            self.log_info(
+                f"海边前周末：体力 {stamina} < {floor}，今天不去餐厅打工"
+                f"（还剩 {'、'.join(s.place for s in kept)}）")
+            return kept
+        return steps
+
+    def vacation_eve_park(self, st):
+        """今天只去公园；公园今天已经去过就返回空计划（当天结束）。"""
+        if "公园" in (st.get("visited") or set()):
             return []
-
-        # 主计划首选就是餐厅 → 不是 detour（商店流 / 钱不够 / 训练流缺口小）。
-        if main[0] == "餐厅":
-            return [WeekendStep(p, False) for p in main]
-
-        if (not self.venue_has_urgent(texts, "餐厅")
-                or "餐厅" in visited
-                or (self.style == "扭蛋流" and st.get("gacha_spent"))):
-            return [WeekendStep(p, False) for p in main]
-
-        self.log_info(f"周末：餐厅有「急招！」→ 插到最前（原首选 {main[0]}）")
-        return ([WeekendStep("餐厅", True)]
-                + [WeekendStep(p, False) for p in main if p != "餐厅"])
+        return [WeekendStep("公园", False)]
 
     # ---------- 地点名的框 ----------
 

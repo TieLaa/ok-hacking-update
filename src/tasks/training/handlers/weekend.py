@@ -12,6 +12,7 @@ import time
 
 from src.tasks.ui import labels
 from src.tasks.training import attributes, roster
+from src.tasks.training.constants import SHOP_SEASON_WEEKS
 from src.tasks.training.places import activities
 
 
@@ -302,6 +303,9 @@ class WeekendHandlers:
         cache = getattr(self, "_shop_detail_cache", None)
         if cache is None:
             cache = self._shop_detail_cache = {}
+        # 最后一场比赛（第 7 周周日）不分品质：蓝/白商品的详情也要读，
+        # 否则只能靠名字表判断类别，未登记的蓝卡会被漏掉。
+        final_match = self.current_day() == (SHOP_SEASON_WEEKS, "日")
         for item in items:
             if item["price"] == 0:
                 continue                        # 0 元（红包）直接买，不用看详情
@@ -310,7 +314,8 @@ class WeekendHandlers:
             if self.shop_known(item["name"]):
                 if money is not None and item["price"] > money:
                     continue
-                if item.get("quality") in self.SHOP_SKIP_QUALITIES:
+                if (item.get("quality") in self.SHOP_SKIP_QUALITIES
+                        and not final_match):
                     continue
             name = item["name"]
             if name in cache:

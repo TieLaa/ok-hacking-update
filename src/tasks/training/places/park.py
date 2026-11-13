@@ -48,7 +48,7 @@
     所以：标题只当**判据**，实际点击永远走选项文字框。
 """
 
-from src.tasks.training.constants import WEEKEND_PICNIC_FALLBACK
+from src.tasks.training.constants import PARK_BOAT_STAMINA, WEEKEND_PICNIC_FALLBACK
 from src.tasks.ui import labels
 
 # 地点名（地图上的按钮文字 / 状态里的键）
@@ -99,7 +99,27 @@ class ParkPlace:
             缺口 < 周末野餐阈值                          → 划船
 
         其它流派保持 2026-11-08 的「划船队友多 2 个 → 划船」。
+
+        第3周周末例外（用户 2026-11-13）：第4周海边合宿的最后一天是
+        全队友训练，前一天体力不够就得休息，所以公园按「离目标还差多少」
+        选 —— 差 > 划船 +30 才野餐，否则划船（队友和配置都不抢）。
         """
+        # 第3周周末：海边前要把体力拉回目标，野餐/划船只按缺口选，
+        # 队友和配置都不抢（`vacation_eve_target` 不是这一周时返回 None）。
+        target = self.vacation_eve_target()
+        if target is not None:
+            stamina = self.top_bar(texts).get("stamina")
+            if stamina is not None:
+                gap = target - stamina
+                if gap > PARK_BOAT_STAMINA:
+                    self.log_info(
+                        f"海边前周末：体力 {stamina} 距目标 {target} 差 {gap}"
+                        f"（> 划船 {PARK_BOAT_STAMINA}）→ 野餐")
+                    return "野餐"
+                self.log_info(
+                    f"海边前周末：体力 {stamina} 距目标 {target} 差 {gap} → 划船")
+                return "划船"
+
         if style == "训练流":
             gap = self.weekend_gap(texts)
             if gap is not None:

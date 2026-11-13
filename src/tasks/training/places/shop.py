@@ -18,8 +18,9 @@
 2026-11-05 用户口径：进了店就按「商店购买策略」正常顺序买，**不清空**。
 
 2026-11-11 用户口径（**取代**「第 7 周前只买 0 元」和「彩金紫」两套旧规则）：
-- 商店内顺序**对所有流派相同**：现金 → 牛奶 → 精力 → 教科书 → 器材 → 属性
-  （`constants.SHOP_PRIORITY`）。流派只决定「进不进店、带多少钱」，不决定买什么；
+- 商店内顺序**对所有流派相同**（2026-11-13 定稿：现金 → 牛奶 → 精力 →
+  器材指导教程/指导书 → 器材手册 → 教科书 → 属性）。流派只决定「进不进店、
+  带多少钱」，不决定买什么；
 - **训练流 / 商店流**：进店就按顺序买，不设周数限制；
 - **扭蛋流 / 小游戏流**：前 6 周零花钱留给周末的步行街/游戏厅，只拿必拿；
 - 现金类（老板的馈赠 / 大乐透）永远最先，纯赚档不看余额；
@@ -32,7 +33,7 @@ from src.tasks.training import attributes
 from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK,
                                           SHOP_BASE_CATEGORY, SHOP_ITEMS,
                                           SHOP_ITEM_PREFIX,
-                                          SHOP_NEVER_BUY, SHOP_PRIORITY,
+                                          SHOP_NEVER_BUY,
                                           SHOP_SEASON_WEEKS,
                                           SHOP_STAMINA_ITEMS,
                                           SHOP_STAMINA_UNKNOWN_ASSUME,
@@ -58,13 +59,26 @@ class ShopPlace:
 
     # 2026-11-12 用户口径（合并 11-11 的类别优先 + 11-08 的品质判断）：
     # 顺序 = 现金 → 牛奶 → 精力 → 其余按 **彩/金/紫**（蓝/白不买）
-    # → 同品质内 教科书 → 器材 → 属性。
+    # → 同品质内按下面 SHOP_SLOT_RULES。
     # 牛奶/精力是功能性商品（用户口径里排在品质之前），不按颜色筛。
     SHOP_BUY_QUALITIES = ("彩", "金", "紫")
     SHOP_QUALITY_RANK = {"彩": 0, "金": 1, "紫": 2}
     SHOP_GROUP = {"milk": 0, "stamina": 1}   # 不在表里的进第 2 组（按品质）
     # 只挡**明确取色到**的蓝/白；"其他"=取色失败，不等于蓝卡，照买。
     SHOP_SKIP_QUALITIES = ("蓝", "白")
+
+    # 2026-11-13 用户口径：**同品质内**的先后
+    #   器材指导教程 / 器材指导书（同档，按数值分先后） → 器材手册 → 教科书 → 属性
+    # 牛奶/精力由 SHOP_GROUP 排在品质之前，不参与这张表。
+    # 名字认不出时退回类别档，OCR 错字只会掉档、不会让商品消失。
+    SHOP_SLOT_RULES = (
+        ("器材指导教程", 0),
+        ("器材指导书", 0),
+        ("器材手册", 1),
+        ("教科书", 2),
+    )
+    SHOP_SLOT_BY_CATEGORY = {"textbook": 2, "equipment_boost": 1,
+                             "attribute": 3}
 
     # ---------- 详情面板效果文本（2026-11-12） ----------
     # 商品卡只显示「名字 + 价格 + 品质底色」，**效果要选中卡片后看右侧详情**。
@@ -289,15 +303,20 @@ class ShopPlace:
         """
         return item.get("detail_category") or self.shop_category(item["name"])
 
-    def shop_tier(self, category):
-        """该类商品在商店里的档位；不在表里返回 None（不参与购买）。
+    def shop_slot(self, name, category):
+        """同品质内的档位（2026-11-13 用户口径）。
 
-        2026-11-11 用户口径：**所有流派共用同一条顺序**，商店里不按流派筛选。
+        0 器材指导教程 / 器材指导书（同档，数值再分先后）
+        1 器材手册
+        2 教科书
+        3 属性（再按 `attr_sub`：全属性 → 需求属性 → 专属饮料 → 奇妙秘籍 → 其他）
+        名字认不出时退回类别档：教科书 2、其余器材 1、属性 3。
+        所有流派共用同一条顺序，商店里不按流派筛选。
         """
-        try:
-            return SHOP_PRIORITY.index(category)
-        except ValueError:
-            return None
+        for word, slot in self.SHOP_SLOT_RULES:
+            if word in (name or ""):
+                return slot
+        return self.SHOP_SLOT_BY_CATEGORY.get(category, 3)
 
     def shop_known(self, name):
         """这个名字认得出来吗？精确表 → 基础名 → 前缀，任一层命中就算。"""
@@ -394,19 +413,20 @@ class ShopPlace:
           7. 排序分组：**牛奶 → 精力 → 其余**；牛奶/精力不按颜色筛（功能性商品），
              其余**只挡明确的蓝/白**，取色失败（其他）照买（0 元商品不受限）；
           8. 时限商品要剩余训练日够；
-          9. 排序：分组 → 其余组的品质 彩→金→紫 → `SHOP_PRIORITY` 档位
-             （教科书→器材→属性）→ 数值 → 价格。
+          9. 排序：分组 → 其余组的品质 彩→金→紫 → 同品质档位
+             （器材指导教程/指导书 → 器材手册 → 教科书 → 属性）
+             → 属性子档 → 数值 → 价格。
 
         2026-11-12 用户口径（对 11-11 的补充，不是回退）：
         现金、牛奶依然最先，接着各种精力商品，然后才按 彩→金→紫 挑；
-        同品质内再按 教科书 → 器材 → 属性。11-11 的「牛奶/精力优先」保留。
+        同品质内再按 2026-11-13 的档位表。11-11 的「牛奶/精力优先」保留。
         「默认不买蓝色」只作用于最后一组 —— 蓝色属性饮料不再被买走。
 
-        流派差异**只体现在 `SHOP_PRIORITY` 那张表里**，代码不分叉：
-        训练流 cash→milk→stamina→textbook→equipment→attribute；
-        其他流派 cash→attribute→stamina，牛奶/教科书/器材不在它们的考虑范围。
+        2026-11-13 用户口径（最后一场比赛）：第 7 周周日只买直接加六维的
+        属性商品，**不分品质**（蓝/白也买）；器材、教科书、牛奶、精力都不买。
+        属性缺口、`soft_cap` 减半、余额、0 元商品规则照旧。
         """
-        week = self.current_day()[0]
+        week, day = self.current_day()
         items = [i for i in items
                  if self.shop_category(i["name"]) != "never"
                  and not any(w in i["name"] for w in SHOP_NEVER_BUY)]
@@ -429,6 +449,17 @@ class ShopPlace:
         if free_cash or paid_cash:
             pick = max(free_cash or paid_cash, key=lambda i: -i["y"])
             return pick, "必定优先拿（%s）" % pick["name"]
+
+        # 2026-11-13 用户口径：第 7 周周日是**最后一场比赛**，只买直接加
+        # 六维的属性商品（不分品质，蓝/白也买）；器材/教科书/牛奶/精力都
+        # 不再买（训练类在最后一天兑现不了）。缺口、余额、0 元规则照旧 ——
+        # 所以这里只换「类别」和「品质」两把闸，下面的管道继续走。
+        final_match = week == SHOP_SEASON_WEEKS and day == "日"
+        if final_match:
+            items = [i for i in items
+                     if self.item_category(i) == "attribute"]
+            if not items:
+                return None, "最后一场比赛：店里没有属性商品，关店"
 
         # 扭蛋流 / 小游戏流：前 6 周零花钱要留周末，只拿必拿（现金类，
         # 上面已经返回）；训练流 / 商店流不设周数限制，进店就按顺序买。
@@ -478,7 +509,7 @@ class ShopPlace:
                     self.item_category(i), 0)]
 
         # 2026-11-12 用户口径（对 11-11 的补充，不是回退）：
-        #   现金 → 牛奶 → 精力 → 其余按 彩/金/紫 → 同品质 教科书→器材→属性。
+        #   现金 → 牛奶 → 精力 → 其余按 彩/金/紫 → 同品质档位（教程/手册/教科书/属性）。
         # 牛奶/精力是功能性商品（用户把它们的优先级排在品质之前），**不按颜色筛**；
         # 其余（教科书/器材/属性）默认只买 彩/金/紫 —— 蓝/白不买。
         #
@@ -495,27 +526,26 @@ class ShopPlace:
             quality = i.get("quality")
             if i["price"] == 0 or cat in self.SHOP_GROUP:
                 premium.append(i)
-            elif quality not in ("蓝", "白"):
+            elif final_match or quality not in ("蓝", "白"):
                 premium.append(i)
         if not premium:
             return None, "只剩蓝/白商品了（默认不买蓝色）"
         affordable = premium
 
         # 排序：分组（牛奶→精力→其余）→ 其余组的品质 彩→金→紫
-        #       → 0 元 → 档位（教科书→器材→属性）→ 数值 → 价格 → 屏幕靠上
+        #       → 0 元 → 同品质档位（教程/指导书→手册→教科书→属性）
+        #       → 属性子档 → 数值 → 价格 → 屏幕靠上
         ranked = []
         required = set(required or ())
         attrs = attrs or {}
         caps = caps or {}
         for i in affordable:
             cat = self.item_category(i)
-            tier = self.shop_tier(cat)
-            if tier is None:
-                continue
+            slot = self.shop_slot(i["name"], cat)
             group = self.SHOP_GROUP.get(cat, 2)
-            quality = (self.SHOP_QUALITY_RANK.get(i.get("quality"), 9)
-                       if group == 2 else 0)
-            # 2026-11-13：属性类内部 全属性 > 需求专项 > 其他专项；
+            quality = (0 if group != 2 or final_match
+                       else self.SHOP_QUALITY_RANK.get(i.get("quality"), 9))
+            # 2026-11-13：属性类内部 全属性 > 需求属性 > 专属饮料 > 奇妙秘籍 > 其他；
             # 缺口不足 `gap_limit` 的不买，过 `soft_cap` 的数值减半。
             attr_sub = 0
             value = self.shop_value(i)
@@ -525,8 +555,12 @@ class ShopPlace:
                     attr_sub = 0
                 elif target in required:
                     attr_sub = 1
-                else:
+                elif "专属" in i["name"]:
                     attr_sub = 2
+                elif "奇妙" in i["name"]:
+                    attr_sub = 3
+                else:
+                    attr_sub = 4
                 cur, cap = attrs.get(target), caps.get(target)
                 if (target and target != "ALL"
                         and cur is not None and cap is not None):
@@ -534,7 +568,7 @@ class ShopPlace:
                         continue
                     if cur >= soft_cap:
                         value *= 0.5
-            ranked.append((group, quality, 0 if i["price"] == 0 else 1, tier,
+            ranked.append((group, quality, 0 if i["price"] == 0 else 1, slot,
                            attr_sub,
                            0 if self.shop_known(i["name"]) else 1,
                            self._target_penalty(i),

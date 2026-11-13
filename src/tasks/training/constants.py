@@ -279,6 +279,12 @@ WEEKEND_PLAN = {
 # 判断「能不能接这张卡」不看这个数字本身，而是看界面（见 weekend.option_selectable）。
 WORK_STAMINA_COST = 25
 
+# 公园恢复量（用户 2026-11-10 确认的实跑数值：划船 +30、野餐 +70）。
+# 业务选择仍按界面标签，这两个数只用于「第3周周末把体力拉回目标」的规划
+# （`places/map.py: vacation_eve_guard` / `places/park.py: park_pick`）。
+PARK_BOAT_STAMINA = 30
+PARK_PICNIC_STAMINA = 70
+
 # 第几周开始按「红包 → 彩 → 金 → 紫」买。
 # 用户 2026-11-08 口径（**取代** 之前的进店/购买口径）：
 #   - **进店**：只要有「新品上市」标签就进，不分周数（`daycycle.late_shop_step`）；
@@ -419,17 +425,16 @@ for _attr in ("投射", "弹跳", "防守", "运控", "体能", "意识"):
     SHOP_BASE_CATEGORY["奇妙" + _attr + "秘籍"] = "attribute"
 del _attr
 
-# 商店购买顺序（**所有流派相同**，2026-11-11 用户口径）：
-#   cash → milk → stamina → textbook → equipment_boost → attribute
+# 商店购买顺序（**所有流派相同**）：
+#   现金 → 牛奶 → 精力 → 器材指导教程/指导书 → 器材手册 → 教科书 → 属性。
+# 实际顺序表在 `places/shop.py: SHOP_SLOT_RULES`（按名字判，跨类别），这里只留说明。
 #
 # 为什么不分流派：商店内同一件商品的相对价值与流派无关，流派只决定
 # 「进不进店、带多少钱」——
 #   训练流  不进步行街/游戏厅，商店是唯一消费口；
 #   商店流  商店优先；
 #   扭蛋流 / 小游戏流  优先自己的场所，商店只在最后清余额时进。
-# 所以这里只有一列，没有 STYLE_COL。
-SHOP_PRIORITY = ("cash", "milk", "stamina", "textbook",
-                 "equipment_boost", "attribute")
+# 所以没有 STYLE_COL。
 
 # 一周里的训练日（周一~周五），周末是出行日；用来算剩余训练日
 SHOP_TRAINING_WEEKDAYS = 5

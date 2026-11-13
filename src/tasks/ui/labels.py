@@ -151,7 +151,7 @@ SPEED_TEXTS = ("快进", "倍速", "自动", "手动")
 # 这页出现在**游戏刚启动**时并盖住整个界面；队长识别阶段会一直点「返回」直到看门狗停任务。
 ANNOUNCEMENT_TITLE = ("公告",)
 ANNOUNCEMENT_TABS = ("置顶", "最新", "热门")
-ANNOUNCEMENT_CLOSE = (0.950, 0.069)   # 实测 (1470, 60) / 1548x871
+ANNOUNCEMENT_CLOSE = (0.930, 0.111)   # ✕ 图标中心 (1440, 97) / 1548x871（旧值 (1470,60) 点空）
 VACATION_TEXTS = ("海边合宿", "度假", "合宿")
 CONFIRM_TEXTS = ("决定",)
 

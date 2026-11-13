@@ -218,6 +218,12 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
             if self.is_loading(texts):
                 self.sleep(0.6)
                 continue
+            # 整页公告（开服/更新公告）盖住一切：返回箭头和 ESC 都点不掉它。
+            # 判据与点击在 training/handlers/popup.py，其它任务（快速比赛）没有这个能力。
+            close_announcement = getattr(self, "handle_announcement", None)
+            if close_announcement is not None and close_announcement(texts):
+                self.sleep(0.4)
+                continue
             if self.looks_like_match(texts) and not self.in_match_menu(texts):
                 self.log_warning(
                     "回大厅中止：当前在比赛/小游戏界面，盲点返回有风险，请人工退到大厅")
