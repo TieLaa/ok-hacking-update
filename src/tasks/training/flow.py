@@ -186,8 +186,13 @@ class TrainingFlowMixin:
         try:
             return self._run_one_round()
         finally:
-            self.evidence.end_round(getattr(self, "_abort_reason", "") or "",
-                                    self._steps, style=getattr(self, "_style", "") or "")
+            # captain 要到收工才知道：接管局开局时没指定队长（目录已按「接手」命名），
+            # 队长由日历识别出来、只写在 `_style_name` 里（2026-11-10 19:08 实跑）。
+            self.evidence.end_round(
+                getattr(self, "_abort_reason", "") or "",
+                self._steps,
+                captain=getattr(self, "_style_name", "") or self.configured_captain(),
+                style=getattr(self, "_style", "") or "")
 
     def start_round_evidence(self):
         """定下本局的存证目录（回大厅之后调用：那段时间不属于这一局）。"""
@@ -335,6 +340,15 @@ class TrainingFlowMixin:
                 self._arcade_wait_since = 0.0
                 last_sig = None
 
+            # 上一拍被暂停/让路拉长（等用户停手、监控页暂停、抢前台失败）→ 这段空转
+            # 里没有点击、界面当然不会变，不能算「点了没反应」。
+            # 2026-11-10 19:10 实跑：让路 13.9 秒被判成 15.8 秒没变化，接管 3 次后停任务。
+            now = time.time()
+            if now - getattr(self, "_tick_at", 0.0) > 5.0:
+                self._sig_changed_at = now
+                self._last_click_at = 0.0
+            self._tick_at = now
+
             # 界面指纹：同一页面每拍都一样；用于 ①「3 秒无响应」判据 ② unknown 存证限流
             sig = self._signature(texts)
             changed = sig != last_sig
@@ -416,8 +430,8 @@ class TrainingFlowMixin:
                 continue
 
             # ---- 兜底：不认识的界面也**让流程继续走**，不要卡死 ----
-            # 存证限流：同一段时间最多 3 秒存一张，避免动画期间刷出几十张图
-            if changed and time.monotonic() - self._last_dump > 3:
+            # 存证限流：同一段时间最多 5 秒存一张，避免动画期间刷出几十张图
+            if changed and time.monotonic() - self._last_dump > 5:
                 self.dump_unknown(texts, "unknown")
                 self._last_dump = time.monotonic()
                 self.log_warning("没见过这个界面 → 已存证，点一下继续")
@@ -610,8 +624,10 @@ class TrainingFlowMixin:
         pos = queue.position
         score = ratings.get(pos) if pos else None
         if score is None:
-            self.log_warning(f"读不到队长「{queue.captain}」（位置 {pos}）的评分"
-                             f"——这一页读到 {ratings or '空'}，本局按未达标算")
+            # 页面淡入的第一拍 OCR 必读不到（2026-11-10 实跑 4/4 都是下一拍才成功），
+            # 这里报 warning 会每次都吓人一跳；真读不到由局末收账补一条。
+            self.log_debug(f"读不到队长「{queue.captain}」（位置 {pos}）的评分"
+                           f"——这一页读到 {ratings or '空'}，下一拍再读")
             return None
         self._run_score = score
         self.log_info(f"本局评分：{queue.captain}（{pos}）{score}"
@@ -635,6 +651,8 @@ class TrainingFlowMixin:
             return False
         captain = queue.captain
         score = getattr(self, "_run_score", None)
+        if score is None:
+            self.log_warning(f"整局都没读到队长「{captain}」的评分 → 本局按未达标算")
         met = queue.record(score)
         self.log_info(f"第 {len(queue.runs)} 局收账：{captain} 评分 {score}"
                       f" / 目标 {queue.target} → {'达标' if met else '未达标，再练一局'}"
@@ -722,7 +740,7 @@ class TrainingFlowMixin:
         坑（2026-10-26）：之前把坐标也算进指纹，动画/滚动时文字位置抖动 20px 就变，
         结果每一拍都被当成"新界面"。
 
-        现在它**只用于 unknown 存证限流**（同一页面 3 秒最多存一张）。
+        现在它**只用于 unknown 存证限流**（同一页面 5 秒最多存一张）。
         卡住判据已经改成「同一天攒了多少」（`day_stuck_step`）：顶栏数字/星标每拍都在闪，
         指纹一直在变，靠它判卡死只会永远判不出来。
         """
@@ -739,7 +757,6 @@ class TrainingFlowMixin:
         handler 里点几次就数几次，不怕漏。
         """
         at = time.time()
-        self._last_click_at = at
         px, py = self._click_point(x, y)
         record = {
             "at": round(at, 3),
@@ -759,16 +776,29 @@ class TrainingFlowMixin:
             record["error"] = f"{type(e).__name__}: {e}"
             raise
         finally:
-            # 点击**完成**时刻才算「最近一次点击」：用户抢鼠标时 interaction 会在
-            # click 里面暂停几秒，用开始时刻计时会让统计把这段让路算成空档。
-            self._last_click_at = time.time()
+            if self._click_skipped(at):
+                # 闸门拦下的点击（暂停/停止/抢不到前台）根本没发出去：
+                # 既不算「最近一次点击」（否则看门狗会以为点过），也不计入当天点击数。
+                # 2026-11-10 19:10 实跑：暂停中点了「安心按摩」，日志里有 left_click，
+                # 实际一下都没发，看门狗照样接管 3 次后停任务。
+                record["ok"] = False
+                record["skipped"] = True
+            else:
+                # 点击**完成**时刻才算「最近一次点击」：用户抢鼠标时 interaction 会在
+                # click 里面暂停几秒，用开始时刻计时会让统计把这段让路算成空档。
+                self._last_click_at = time.time()
+                # 卡住判据②：同一天点击数 +1（`stuck_takeover` 用它判「一天点了多少下」）
+                self.note_click()
             self._journal_click(record)
-            # 卡住判据②：同一天点击数 +1（`stuck_takeover` 用它判「一天点了多少下」）
-            self.note_click()
             # 记进本拍点击列表，snap_event 会把它写进事件 json（报告「内容」列）
             tick_clicks = getattr(self, "_tick_clicks", None)
             if tick_clicks is not None:
                 tick_clicks.append({"name": record["name"], "x": px, "y": py})
+
+    def _click_skipped(self, at):
+        """这次 click 是不是被闸门拦下了（暂停/停止/抢不到前台），没真正发出去。"""
+        interaction = getattr(self, "_gate_interaction", None)
+        return getattr(interaction, "last_skip_at", 0.0) >= at
 
     @staticmethod
     def _click_point(x, y):
@@ -1130,9 +1160,12 @@ class TrainingFlowMixin:
         """清空流派（新的一局 / 接管一局）：等日历解析队长。"""
         self._style = None
         self._style_name = None
-        # 2026-11-01：识别队长改成**主动**做（daycycle._resolve_style_step），
-        # 它的计数器是 _style_return_tries / _style_calendar_tries，
-        # 旧的 _style_probe_tries / _style_probe_at 随 handle_style_probe 一起删了。
+        # 状态机和计数器必须一起清：ok-script 复用同一个 Task 实例，
+        # 上一局停在「抓名字」且 tries 已到 3，新局会直接进「抓名字」→
+        # 一次读不到就放弃（2026-11-10 19:10 实跑：开新局 0.07 秒就报「未能识别到队长」）。
+        self._style_probe_state = None
+        self._style_return_tries = 0
+        self._style_calendar_tries = 0
 
     def configured_captain(self):
         """这次 run 的「指定队长」：本次队列优先，否则界面配置。

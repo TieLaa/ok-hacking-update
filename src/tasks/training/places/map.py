@@ -41,10 +41,18 @@ class MapPlace:
         地图上没有「出行」按钮（2026-10-27 修正）：旧判据是「有地点名就是地图」，
         但周末首页的台词也含地点名（「告诉她公园的草坪是假的」），
         结果首页被判成地图、永远不点「出行」。
+
+        2026-11-13 修正：地点名必须是**整框短标签**，且至少两个。
+        事件正文也会出现「公园」（「篮球社集体在公园打街球时…」），
+        包含匹配会把事件页当成地图 → `handle_weekend` 误置「今天出行已用」，
+        还会抢在 `handle_event_choice` 后面点不到按钮空转。
         """
         if self.match_text(texts, "出行") is not None:
             return False
-        return self.match_text(texts, labels.WEEKEND_PLACES) is not None
+        places = [t for t in texts
+                  if len(t.name.strip()) <= 4
+                  and t.name.strip().rstrip("+") in labels.WEEKEND_PLACES]
+        return len(places) >= 2
 
     # ---------- 周末缺口（训练流） ----------
 

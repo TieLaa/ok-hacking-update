@@ -85,6 +85,9 @@ class GirlsInteraction(BaseInteraction):
         # 任务层用它挂紧急停止（等待可能很久，热键不能等到用户停手才生效）。
         self.abort_check = None
         self._stop_requested = False     # 等待期间收到停止请求 → 下一次点击直接跳过
+        # 最近一次「闸门拦下动作」的时刻（wall clock）：暂停/停止/抢不到前台时
+        # 动作根本没发出去，任务层的看门狗不能把它当成「点过一下」。
+        self.last_skip_at = 0.0
 
     # ---------- 窗口 ----------
 
@@ -342,14 +345,17 @@ class GirlsInteraction(BaseInteraction):
         静默放弃（下一拍会重试）。
         """
         if self._blocked():
+            self.last_skip_at = time.time()
             return False
         self.wait_for_user_idle()
         if self._blocked():
             if log_skip:
                 logger.info("停止/暂停请求 → 本次点击跳过")
+            self.last_skip_at = time.time()
             return False
         self._action_started_at = self._now_tick()
         if need_foreground and not self.ensure_foreground():
+            self.last_skip_at = time.time()
             if self._blocked():          # 抢前台途中被停止/暂停叫停，不是故障
                 return False
             if raise_if_no_foreground:

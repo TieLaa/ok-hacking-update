@@ -11,6 +11,23 @@ from src.tasks.ui import labels
 
 class EntryHandlers:
 
+    def handle_game_title(self, texts):
+        """游戏标题页（NBA / 账号 / 版本号 / 适龄提示）：点「点击进入」进游戏。
+
+        2026-11-10 19:05 实跑：切窗口/开快速比赛把游戏打回标题页，兜底点的是
+        屏幕中央 (0.5w,0.5h)，点不中底部 (0.46w,0.83h) 的「点击进入」，
+        7 秒后才由用户手动点进去。判据要求「点击进入」+ 任一标题页特征词，
+        避免剧情正文里的「点击进入」被误认。
+        """
+        enter = self.exact_text(texts, (labels.GAME_TITLE_ENTER,))
+        if enter is None:
+            return False
+        if self.match_text(texts, labels.GAME_TITLE_MARKS) is None:
+            return False
+        self.click_box(enter, after_sleep=1.2)
+        self.log_info("游戏标题页：点「点击进入」")
+        return True
+
     def handle_dialog_continue(self, texts):
         """剧情/提示：右上角有「跳过」就点，否则交给 handle_story_arrow 连点推进。
 
@@ -183,7 +200,12 @@ class EntryHandlers:
         （「SSR 佐久间 雨乃」）。配置 `指定队长` 填名字时，逐张点开比对，
         找到就点「下一步」；留空时沿用旧逻辑（点第一张，等级最高）。
         """
-        if self.match_text(texts, "训练核心") is None:
+        # 必须**整词**：`match_text` 的「整段拼接」兜底会把训练日主界面里的
+        # 「…都给我好好训练」+「核心评分提升！」拼成「训练核心」，于是主界面被当成
+        # 选队长页 → 扫 16 张空卡后报「没有这个队长」停任务
+        # （2026-11-13 12:44 实跑：同一局第一次选队长成功，第二天就误入并停任务）。
+        # 真正的选队长页有一个独立的 `训练核心` 框（四次 OCR 都是 1.00 分）。
+        if self.exact_text(texts, ("训练核心",)) is None:
             return False
 
         if self.no_captain_mode:
@@ -261,7 +283,11 @@ class EntryHandlers:
                     self.log_info(f"选定队长「{name}」"
                                   f"（匹配「{want}」）" + ("" if ok else "（点下一步没反应）"))
                     return True
-            if prev_names is not None and page_names == prev_names:
+            # 名字全读不到时 page_names 是 ["","","",""]，比较必然相等 →
+            # 每屏都误报「翻页没动」（2026-11-10 实跑 3 条全是这种）。
+            # 空结果不参与翻页判断，交给下面的正常翻页。
+            if (prev_names is not None and any(page_names)
+                    and page_names == prev_names):
                 self.log_warning(
                     f"第{page + 1}屏和上一屏读到的 4 张卡完全相同 → 上次翻页没动，加大幅度重拖")
                 self._captain_scroll_page(big=True)
@@ -276,21 +302,36 @@ class EntryHandlers:
     def _captain_scroll_to_top(self, max_tries=6):
         """把队长列表翻回**顶部**（接手时可能停在最下面）。
 
-        判据用整屏文字集合：往上拖一屏后集合不再变化，说明到顶。
+        判据用**卡片区**的文字集合：往上拖一屏后集合不再变化，说明到顶。
+        不能再用整屏集合 —— 2026-11-10 19:07 实跑：顶栏专注值/日期每拍在变，
+        整屏集合永远不相等，拖满 6 次都判不到顶（和 _signature 同一个坑）。
         不点卡（点卡每屏要多花 3 秒）。
         """
         x = int(self.width * 0.82)
-        prev = frozenset(t.name.strip() for t in self._ocr_region())
+        prev = self._captain_list_texts()
         for i in range(max_tries):
             # 手指从上往下拖 = 内容向下滚 = 显示更上面的角色
             self.swipe(x, int(self.height * 0.30), x, int(self.height * 0.62),
                        duration=0.30, after_sleep=0.7)
-            cur = frozenset(t.name.strip() for t in self._ocr_region())
+            cur = self._captain_list_texts()
             if cur == prev:
                 self.log_info(f"队长列表已翻到顶（往上翻 {i} 次）")
                 return
             prev = cur
         self.log_warning(f"往上翻了 {max_tries} 次还没到顶，按当前位置继续")
+
+    def _captain_list_texts(self):
+        """卡片区的文字集合，只用来判断列表有没有真的滚动。
+
+        卡片区一个文字都读不到时（纯头像卡），退回整屏但**排除顶栏**：
+        顶栏专注值/日期每拍在变，不排除就永远判不到顶（这局的原 bug）。
+        """
+        texts = self._ocr_region()
+        picked = self.texts_in_region(texts, "captain_list")
+        if picked:
+            return frozenset(t.name.strip() for t in picked)
+        return frozenset(t.name.strip() for t in texts
+                         if (t.y + t.height / 2) / self.height >= 0.12)
 
     def _captain_scroll_page(self, big=False):
         """选队长列表往下翻一页：拖动为主，滚轮兜底。

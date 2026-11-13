@@ -12,7 +12,7 @@ from src.util.log_noise import install_quiet_filters
 # 都会 import 本模块，是唯一能覆盖全部启动路径的单点（细节见该模块 docstring）。
 install_quiet_filters()
 
-version = "0.1.16"
+version = "0.1.17"
 #不需要修改version, Github Action打包会自动修改
 
 gui_config = {

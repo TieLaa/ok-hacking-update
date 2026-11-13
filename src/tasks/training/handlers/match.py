@@ -338,6 +338,12 @@ class MatchHandlers:
         同理「关闭」不能交给 handle_popup —— 它会在任何页面上点第一个「关闭」。
         """
         stage = getattr(self, "_register_stage", None)
+        # 活动积分结算页（PT 活动：分数进池换奖品）是正常展示，不是「卡住」：
+        # 这页停留十几拍，旧判据会误报 register_stuck（2026-11-12 17:28 实跑 21 拍）。
+        # 只清计数、不认领页面 —— 这页仍交给 popup / 兜底去点，别在这里抢。
+        if self.match_text(texts, "获得活动积分") is not None:
+            self._reg_tick_stage, self._reg_ticks = None, 0
+            return False
         # 拍数上限：连续 20 拍停在同一 stage 上（页面没推进）就存证 + 放弃，
         # 绝不允许无限重试（2026-10-28 18:17 空烧 890 拍）。
         # 2026-10-29 修正：stage 为 None = **还没进注册流程**（普通训练/剧情页），
@@ -406,6 +412,15 @@ class MatchHandlers:
                 target = next((t for t in texts
                                if t.name.strip().startswith("下一")
                                and len(t.name.strip()) <= 4), None)
+            # 右下角那颗「下一步」是上一页（比赛结算）的残留：注册球员页的在 0.66w。
+            # 2026-11-10 / 11-12 三局实测第一次都点 (1333,780) 不动，第二次重新 OCR
+            # 读到 (1019,759) 才推进（s858/s840 存证）。先排除，让结算页的 handler 去点。
+            if target is not None:
+                cx = (target.x + target.width / 2) / self.width
+                if cx > 0.80:
+                    self.log_debug(f"注册球员：右下角「下一步」({int(cx * 100)}%w) "
+                                   "是上一页残留，本拍不点")
+                    target = None
             if target is not None:
                 tries = getattr(self, "_reg_step1_tries", 0) + 1
                 now = time.monotonic()
@@ -779,8 +794,15 @@ class MatchHandlers:
         判据用**黄色按钮边框**而不是底部短文字：训练动画页底部也有
         「投射/体能/防守」等 2 字属性名，旧判据会把它们当选项乱点。
         """
-        if self.match_text(texts, ("在公园", "在餐厅", "野餐", "散步", "划船",
-                                   "当服务员", "桌游", "扭蛋")) is not None:
+        # 这些是地点页的短标签。2026-11-13 实跑：二选一事件的台词
+        # 「篮球社集体在公园打街球时…」含「在公园」被判成地点页 → 事件页没人认领，
+        # handle_weekend 去点「划船」，点不动 → 接管 3 次后停任务
+        # （logs/mcp/6250c6a6…/1113-131116_第2局_百目鬼剑/debug/1113-132147_noresp3s）。
+        # 地名标签都很短，长台词不算。
+        place_words = ("在公园", "在餐厅", "野餐", "散步", "划船",
+                       "当服务员", "桌游", "扭蛋")
+        if any(len(t.name.strip()) <= 8 and any(w in t.name for w in place_words)
+               for t in texts):
             return False
         # 限时比赛活动赛程页（2026-11-03 用户截图）：「暂时退出 / 继续匹配」并排，
         # 没有「下一步」。这一页交给 handle_match_result 点「继续匹配」；

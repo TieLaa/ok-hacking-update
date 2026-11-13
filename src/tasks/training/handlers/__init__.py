@@ -22,6 +22,10 @@ HANDLERS = (
     # 整页公告（开服/更新公告）：游戏刚启动时会盖住一切，必须先关。
     # 2026-11-10 实机：新装环境第一次跑，队长识别阶段连点「返回」7 次没反应 → 看门狗停任务。
     PopupHandlers.handle_announcement,
+    # 游戏标题页（NBA / 账号 / 版本号 / 「点击进入」）：切窗口或游戏崩溃重启后会回到这页。
+    # 旧版落到 unknown 兜底点屏幕中央，点不中底部那颗按钮（2026-11-10 19:05 实跑）。
+    # 放在公告之后：刚启动时公告会盖住标题页，先关公告再点进入。
+    EntryHandlers.handle_game_title,
     # 一局结束的「训练评分」弹层（`训练评分 7728 SS 点击屏幕继续`）：
     # 多角色队列的**达标判据**就靠它读个人评分（2026-11-04 实跑漏读导致「7700 分了还在跑」）。
     # 必须排在 handle_popup / handle_tap_to_continue 之前 —— 它们会直接点「点击屏幕继续」翻页，
@@ -98,6 +102,11 @@ HANDLERS = (
     # 被它先命中就反复点跳过、什么都推进不了（2026-10-30 事故）。
     TalentHandlers.handle_stock_pick,
     TalentHandlers.handle_stock_result,
+    # 工地页（天赋「建设达人」，百目鬼剑；2026-11-13 夜间实跑 6 次）：
+    # 整页只有「进行施工」，不认领就会被 handle_training_hub 当成训练日主界面
+    # （右下角露着「训练」）反复点主按钮 → 空转 100 下 → 接管 3 次后任务自停。
+    # 必须在 handle_training_hub / handle_event_choice 之前。
+    TalentHandlers.handle_construction,
     MatchHandlers.handle_event_choice,
     MatchHandlers.handle_prepare,
     EntryHandlers.handle_dialog_continue,
@@ -155,7 +164,8 @@ LEAVE_RESETS = {
                                  "last_fast_at": 0.0},
     },
     # 训练科目页的选择缓存：离开科目页就清空
-    "handle_subject_select": {"_picked_subject": False, "_picked_index": 0},
+    "handle_subject_select": {"_picked_subject": False, "_picked_index": 0,
+                              "_fail_miss": 0},
     # 训练日主界面的「第几拍」和「等出行按钮」计数：离开这一页就清零。
     # `_hub_ticks` 是「头一拍不决策」的依据（见 HUB_SETTLE_TICKS），
     # 不清就会把第二天的页面当成「已经看过好几拍」→ 又回到淡入那一拍就决策。

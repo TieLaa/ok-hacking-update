@@ -59,6 +59,10 @@ class TrainingHandlers:
     BOOST_GAIN_DX = 0.12
     BOOST_GAIN_Y = (0.25, 0.65)
 
+    # 科目页「失败率」读不到时先等几拍重读：科目页必有这个数字（前置判据就是它），
+    # 漏读通常是淡入。直接开练会绕过「失败率上限(%)」配置（2026-11-10 19:09 实跑 1 次）。
+    FAIL_MISS_TICKS = 2
+
     def handle_training_result(self, texts):
         """训练结果浮层：精力降低了X / 属性提升了 / 触发训练后事件。
 
@@ -408,7 +412,17 @@ class TrainingHandlers:
                 return True
 
         fail = self.read_fail_rate(texts)
-        if fail is not None:
+        if fail is None:
+            # 科目页必有「失败率」（上面的前置判据就是它），读不到通常是页面淡入。
+            # 这时直接练会绕过「失败率上限(%)」配置（2026-11-10 19:09 实跑 1 次）。
+            miss = getattr(self, "_fail_miss", 0) + 1
+            self._fail_miss = miss
+            if miss <= self.FAIL_MISS_TICKS:
+                self.log_debug(f"失败率读不到（第 {miss} 拍）→ 等一拍重读")
+                return True
+            self.log_warning(f"失败率连续 {miss} 拍读不到 → 按 0 处理继续训练")
+        else:
+            self._fail_miss = 0
             self.info_set("当前失败率", f"{fail}%")
         limit = int(self.config.get("失败率上限(%)"))
         if fail is not None and fail > limit:
@@ -713,17 +727,19 @@ class TrainingHandlers:
             if self._boost_gain_missing <= self.BOOST_GAIN_MISSING_MAX:
                 if (time.monotonic()
                         - getattr(self, "_boost_gain_missing_at", 0.0) > 10.0):
-                    self.log_warning(
-                        f"加强训练：{len(rate_cols)} 个百分比列只有 "
-                        f"{len(gain_cols)} 个收益列（收益数字漏读），"
-                        "本拍不选，等下一拍重读")
+                    # 这类漏读通常下一拍就自愈（2026-11-10 实跑 22 次全是两拍解决），
+                    # 第一拍就报 warning 会刷屏；连续对不上才升到下面那条 warning。
+                    self.log_debug(
+                        f"加强训练：百分比 {len(rate_cols)} 列 / 收益 "
+                        f"{len(gain_cols)} 列对不上，本拍不选，等下一拍重读")
                     self.dump_unknown(texts, "boost_gain_missing")
                     self._boost_gain_missing_at = time.monotonic()
                 return True
             self.log_warning(
                 "加强训练：连续 "
                 f"{self._boost_gain_missing} 拍「百分比 {len(rate_cols)} / 收益 "
-                f"{len(gain_cols)}」对不上 → 只从读全的卡里选（不拿成功率当收益）")
+                f"{len(gain_cols)}」列对不上（百分比或收益数字漏读）"
+                " → 只从读全的卡里选（不拿成功率当收益）")
         else:
             self._boost_gain_missing = 0
 

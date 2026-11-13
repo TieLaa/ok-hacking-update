@@ -317,8 +317,13 @@ class TrainingParsersMixin:
             self.log_info(f"专注：OCR 没读出斜杠（粘成 {cands or '无'}），"
                           f"按专注条填充 {frac:.3f}×{mx} 还原为 {est}")
         else:
-            self.log_warning(f"专注：OCR 读 {cur}，专注条填充 {frac:.3f}×{mx} → {est}，"
-                             "按像素值算")
+            # 像素和 OCR 差几个点是常态（2026-11-10 19:23 实跑顶栏一直 114 vs 117），
+            # 每拍都报 warning 会把 GUI 告警区刷满（那一段刷了 30 多条）→ 值变了才记。
+            key = (cur, est)
+            if getattr(self, "_stamina_bar_logged", None) != key:
+                self._stamina_bar_logged = key
+                self.log_info(f"专注：OCR 读 {cur}，专注条填充 {frac:.3f}×{mx} → {est}，"
+                              "按像素值算")
         state["stamina"], state["stamina_max"] = est, mx
         self._stamina_max_seen = mx
         if isinstance(self._stamina_bar_cache, dict):
