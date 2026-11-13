@@ -79,6 +79,7 @@ class GirlsInteraction(BaseInteraction):
         self._pressed_keys = {}
         self.user_idle_wait = USER_IDLE_WAIT  # 任务层可通过配置项覆盖；0 = 关闭等待
         self._script_input_tick = None   # 脚本最后一次动作对应的输入事件 tick
+        self._action_started_at = None   # 本次动作开始时刻（GetTickCount），记账区间起点
         self.steal_count = 0             # 累计让路次数（复盘用）
         # 可选：一个无参可调用对象，返回 True 表示"立刻结束等待"。
         # 任务层用它挂紧急停止（等待可能很久，热键不能等到用户停手才生效）。
@@ -109,8 +110,8 @@ class GirlsInteraction(BaseInteraction):
 
         restore_if_minimized(hwnd)
 
-        # 用户还在用电脑 → 一声不响地等，绝不抢焦点
-        self.wait_for_user_idle()
+        # 等待归口在 `_ready_to_act`（唯一入口）：这里不再等第二次。
+        # 直接调用本方法的外部代码（目前没有）必须自己先等用户空闲。
         # 等待期间用户点了【暂停】/按了停止键：不要再抢前台
         if self._blocked():
             logger.info("收到停止/暂停请求 → 放弃抢前台")
@@ -173,20 +174,34 @@ class GirlsInteraction(BaseInteraction):
             return 0.0
         return delta / 1000.0
 
-    def mark_script_input(self, settle=STEAL_MARK_SETTLE):
-        """动作结束：把当前的「最后一次输入」认定成脚本自己的。
+    def mark_script_input(self, settle=STEAL_MARK_SETTLE, since=None):
+        """动作结束：只把「本次动作区间内」的最后一次输入认成脚本自己的。
 
-        脚本注入的 mouse_event / keybd_event 也会更新 GetLastInputInfo，不记账的话
-        下一次检测会把脚本自己的点击当成用户输入，白等 user_idle_wait 秒。settle 是
-        等系统把这次注入记进输入队列的时间（注入是异步入队的）。
+        为什么不能直接认「当前最后一次输入」（2026-11-13 用户反馈）：用户在你
+        点完的 20ms settle 窗口里动一下鼠标，那一拍就会被记成脚本的，下一拍
+        `wait_for_user_idle` 读到同一个 tick → 判定「没人动」→ 直接抢鼠标。
+        持续操作时鼠标事件约 16ms 一个，这个窗口几乎必然命中，让路规则等于失效。
+
+        `since` 是动作开始时刻（GetTickCount）；不传用 `_action_started_at`
+        （由 `_ready_to_act` 统一记，所有动作共用这一个来源）。动作结束**之后**
+        才出现的输入属于用户，不认领 —— 保留旧基准，下一次动作前自然会等满
+        user_idle_wait 秒。
+
+        settle 仍要等：脚本注入是异步入队的，不等可能读不到自己的事件。
         """
         if self.user_idle_wait <= 0:
             return
         if settle:
             time.sleep(settle)
         tick = self._last_input_tick()
-        if tick is not None:
-            self._script_input_tick = tick
+        if tick is None:
+            return
+        since = since if since is not None else self._action_started_at
+        if since is not None:
+            end = self._now_tick()
+            if ((tick - since) & 0xFFFFFFFF) > ((end - since) & 0xFFFFFFFF):
+                return          # 输入发生在动作结束之后 = 用户的，不认领
+        self._script_input_tick = tick
 
     def wait_for_user_idle(self):
         """动作前调用：用户还在操作就一直等，直到他停手满 user_idle_wait 秒。
@@ -306,7 +321,8 @@ class GirlsInteraction(BaseInteraction):
         except Exception:                           # noqa: BLE001
             pass
 
-    def _ready_to_act(self, *, log_skip=False, raise_if_no_foreground=False):
+    def _ready_to_act(self, *, log_skip=False, raise_if_no_foreground=False,
+                      need_foreground=True):
         """动作前的统一闸门：True = 可以动手。点击/按下/拖动/滚动/按键全走这里。
 
         顺序是有历史原因的（2026-10-25 / 10-29 两次实事故）：
@@ -315,6 +331,12 @@ class GirlsInteraction(BaseInteraction):
         3. 再查一次：等的那几秒里用户可能按了暂停；
         4. `ensure_foreground()`：抢不到前台就**绝不动手** —— 真实鼠标事件会落到
            别的窗口上，实测点到了 ok-script GUI 上。
+
+        `_action_started_at` 在这里统一记：`mark_script_input` 用它划出「本次动作
+        区间」，区间之外的输入一律当用户输入（2026-11-13）。所有动作共用这一个
+        来源，别在调用点各自记。
+
+        `need_foreground=False`：只发键盘/输入文字，不需要抢前台（`input_text`）。
 
         `raise_if_no_foreground`：点击类是硬失败（抛错让人看见）；按下/移动/滚动类
         静默放弃（下一拍会重试）。
@@ -326,7 +348,8 @@ class GirlsInteraction(BaseInteraction):
             if log_skip:
                 logger.info("停止/暂停请求 → 本次点击跳过")
             return False
-        if not self.ensure_foreground():
+        self._action_started_at = self._now_tick()
+        if need_foreground and not self.ensure_foreground():
             if self._blocked():          # 抢前台途中被停止/暂停叫停，不是故障
                 return False
             if raise_if_no_foreground:
@@ -462,10 +485,7 @@ class GirlsInteraction(BaseInteraction):
         self.send_key_up(key)
 
     def input_text(self, text, **kwargs):
-        if self._blocked():
-            return
-        self.wait_for_user_idle()
-        if self._blocked():
+        if not self._ready_to_act(need_foreground=False):
             return
         for ch in str(text):
             vk = win32api.VkKeyScan(ch) & 0xFF
