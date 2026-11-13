@@ -6,6 +6,8 @@
 
 import re
 
+from src.tasks.training.attributes import REQUIRED_BONUS
+
 
 class TrainingScoringMixin:
 
@@ -37,27 +39,26 @@ class TrainingScoringMixin:
                 "gold": 0, "crit": False, "color": 0, "manager_crit": 0}
 
     @classmethod
-    def subject_score(cls, r):
-        """按权重算总分（全部是正分，直接排序）。"""
+    def subject_score(cls, r, required=False):
+        """按权重算总分（全部是正分，直接排序）。
+
+        `required` = 该科目是位置需求属性 → 加 `attr_bonus`（0.5），
+        和队友/器材同级进 score，之后由 `attributes.subject_priority`
+        在过门槛时一起打 0.5 折（用户 2026-11-13 口径）。
+        """
         if not r:
             return 0.0
-        return (r["mates"] * cls.W_MATE
-                + r["equip"] * cls.W_EQUIP
-                + r["manager"] * cls.W_MANAGER
-                + r["gold"] * cls.W_GOLD
-                + r["color"] * cls.W_COLOR)
+        score = (r["mates"] * cls.W_MATE
+                 + r["equip"] * cls.W_EQUIP
+                 + r["manager"] * cls.W_MANAGER
+                 + r["gold"] * cls.W_GOLD
+                 + r["color"] * cls.W_COLOR)
+        if required:
+            score += REQUIRED_BONUS
+        return score
 
-    @staticmethod
-    def subject_rank(score, attr_value, y):
-        """科目排序键（2026-10-27 用户口径）。
-
-        分数 → 当前数值**低**的（成长空间大）→ 屏幕上靠前的（兜底）。
-        **推荐属性（绿色大拇指）已取消**：用户实测训练完成后的总评分不受优势属性
-        影响，练哪条都等价，所以它不再参与排序。
-        读不到数值的属性用 10^6 垫底，不能靠「读不到」白捡便宜。
-        """
-        value = attr_value if attr_value is not None else 10 ** 6
-        return (score, -value, -y)
+    # 科目排序已迁到 `training/attributes.py: subject_priority`（2026-11-13）：
+    # 缺口排除、1300 减半、需求属性 +0.5 都在那边，避免两份判断。
 
     # ---------- 品质卡排序（2026-11-03） ----------
     # 用户口径：**彩 > 金 > 紫 > 蓝**；同品质比**队友头像数量**（多的优先、

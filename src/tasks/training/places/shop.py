@@ -28,6 +28,7 @@
 """
 
 from src.tasks.ui import labels
+from src.tasks.training import attributes
 from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK,
                                           SHOP_BASE_CATEGORY, SHOP_ITEMS,
                                           SHOP_ITEM_PREFIX,
@@ -304,6 +305,10 @@ class ShopPlace:
                 or self.shop_base_name(name) in SHOP_BASE_CATEGORY
                 or any(p in (name or "") for p, _c in SHOP_ITEM_PREFIX))
 
+    def shop_attr_target(self, name):
+        """属性商品加哪一项：`ALL` / 属性名 / None（判据在 `attributes` 一份）。"""
+        return attributes.item_attr_target(name)
+
     def shop_value(self, item):
         """同档内比大小用的数值。
 
@@ -371,7 +376,9 @@ class ShopPlace:
         full_weeks = max(0, SHOP_SEASON_WEEKS - week)
         return this_week + full_weeks * SHOP_TRAINING_WEEKDAYS
 
-    def pick_shop_item(self, items, money, policy, stamina=None, stamina_max=None):
+    def pick_shop_item(self, items, money, policy, stamina=None, stamina_max=None,
+                       required=None, attrs=None, caps=None,
+                       soft_cap=1300, gap_limit=100):
         """选哪件商品？返回 (商品, 原因) 或 (None, 原因)。
 
         2026-11-11 重构（用户口径）：**一条管道** admit → tier → rank，
@@ -445,6 +452,15 @@ class ShopPlace:
         if not kept:
             return None, "恢复精力商品不满足门槛，关店：" + "、".join(rejected)
 
+        # 2026-11-13 用户口径：第 7 周（赛季最后一周）不再买牛奶/精力。
+        # 0 元商品不受限：白送的不叫购买，和「0 元照拿」的既有口径一致。
+        if week is not None and week >= LATE_SHOP_FROM_WEEK:
+            kept = [i for i in kept
+                    if i["price"] == 0
+                    or self.item_category(i) not in ("milk", "stamina")]
+            if not kept:
+                return None, "第 7 周不买牛奶/精力，关店"
+
         # 余额
         affordable = [i for i in kept
                       if i["price"] == 0
@@ -488,6 +504,9 @@ class ShopPlace:
         # 排序：分组（牛奶→精力→其余）→ 其余组的品质 彩→金→紫
         #       → 0 元 → 档位（教科书→器材→属性）→ 数值 → 价格 → 屏幕靠上
         ranked = []
+        required = set(required or ())
+        attrs = attrs or {}
+        caps = caps or {}
         for i in affordable:
             cat = self.item_category(i)
             tier = self.shop_tier(cat)
@@ -496,13 +515,33 @@ class ShopPlace:
             group = self.SHOP_GROUP.get(cat, 2)
             quality = (self.SHOP_QUALITY_RANK.get(i.get("quality"), 9)
                        if group == 2 else 0)
+            # 2026-11-13：属性类内部 全属性 > 需求专项 > 其他专项；
+            # 缺口不足 `gap_limit` 的不买，过 `soft_cap` 的数值减半。
+            attr_sub = 0
+            value = self.shop_value(i)
+            if cat == "attribute":
+                target = self.shop_attr_target(i["name"])
+                if target == "ALL":
+                    attr_sub = 0
+                elif target in required:
+                    attr_sub = 1
+                else:
+                    attr_sub = 2
+                cur, cap = attrs.get(target), caps.get(target)
+                if (target and target != "ALL"
+                        and cur is not None and cap is not None):
+                    if cap - cur < gap_limit:
+                        continue
+                    if cur >= soft_cap:
+                        value *= 0.5
             ranked.append((group, quality, 0 if i["price"] == 0 else 1, tier,
+                           attr_sub,
                            0 if self.shop_known(i["name"]) else 1,
                            self._target_penalty(i),
-                           -self.shop_value(i), i["price"], i["y"], i))
+                           -value, i["price"], i["y"], i))
         if not ranked:
             return None, "当前流派不买这些商品"
-        ranked.sort(key=lambda r: r[:9])
-        pick = ranked[0][9]
+        ranked.sort(key=lambda r: r[:10])
+        pick = ranked[0][10]
         return pick, "按顺序购买（%s/%s）" % (
             pick.get("quality"), self.item_category(pick))

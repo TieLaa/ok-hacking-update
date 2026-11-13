@@ -51,17 +51,22 @@ class RestaurantPlace:
 
     # ---------- 选哪张卡（纯判断） ----------
 
-    def restaurant_order(self, texts):
-        """打工两张卡的点击顺序：**能选的优先** → 默认当服务员 → 桌游GM 多 2 人才改。
+    def restaurant_order(self, texts, allow_fallback=True):
+        """打工两张卡的点击顺序：**能选的优先** → **急招卡优先** → 默认当服务员
+        → 桌游GM 多 2 人才改。
 
-        返回选项名的元组（空的元组 = 两张都点不动）。
+        返回选项名的元组（空的元组 = 没有可选的卡）。
 
         - 先看这张卡现在**能不能选**（`option_selectable`）：界面提示不可用、
           或精力不够它标的消耗 → 不可选；
-        - 两张都可选时：默认选**当服务员**（右边、零用钱++）；只有**桌游GM**
-          的队友比当服务员多 `MATE_MARGIN`（2）个及以上时，才改成桌游GM 优先
-          （用户 2026-11-03 口径，差 1 个仍然选当服务员）；
-        - 都不可选就按上面的默认顺序原样返回，让游戏自己拦（下一拍会重判）。
+        - 卡片上有「急招！」标签 → 那张卡排第一（周末餐厅打工双倍，
+          2026-11-13 用户口径）；
+        - 急招卡不可选时：
+          - `allow_fallback=True`（今天主计划就是餐厅）→ 改选另一张（桌游GM）；
+          - `allow_fallback=False`（急招临时插队）→ 返回空，退出餐厅，回原计划。
+        - 没有急招时：两张都可选 → 默认当服务员（右边、零用钱++）；
+          只有桌游GM 的队友比当服务员多 `MATE_MARGIN`（2）个及以上才改选左边
+          （用户 2026-11-03 口径，差 1 个仍然选当服务员）。
         当服务员默认按 `WORK_STAMINA_COST`（25）算消耗、桌游GM 按 0（不耗精力），
         卡片上写明消耗时以卡片为准。
         """
@@ -78,6 +83,10 @@ class RestaurantPlace:
         blocked = self.blocked_activities()
         counts, how = self.card_mate_counts(found)
         ranked, why = self.restaurant_preference(found, counts)
+        urgent = self.restaurant_urgent_card(texts, found)
+        if urgent is not None:
+            ranked = [urgent] + [b for b in ranked if b is not urgent]
+            why = f"急招！{urgent.name.strip()}双倍"
         free = [b for b in ranked if b.name.strip() not in blocked]
         if not free:
             self.log_warning(f"餐厅：{sorted(blocked)} 今天都点不动，没有可选的卡")
@@ -85,6 +94,14 @@ class RestaurantPlace:
         usable = [b for b in free
                   if self.option_selectable(
                       b, texts, stamina, self.restaurant_card_cost(b, found))]
+        if urgent is not None and urgent not in usable:
+            if not allow_fallback:
+                self.log_info("餐厅：急招卡不可选，且这趟是急招插队 → 退出回原计划")
+                return ()
+            if not usable:
+                self.log_info("餐厅：急招卡不可选，另一张也不可选 → 退出")
+                return ()
+            self.log_info(f"餐厅：急招卡不可选 → 改 {usable[0].name}（普通工资）")
         detail = "、".join(
             f"{b.name}={counts[found.index(b)]}人"
             f"{'' if b in usable else '（不可选）'}"
@@ -99,6 +116,22 @@ class RestaurantPlace:
                       f"｜今天点不动的 {sorted(blocked) or '无'}"
                       f"｜{why} {tail}")
         return tuple(b.name for b in (usable or free))
+
+    def restaurant_urgent_card(self, texts, found):
+        """「急招！」贴在哪个打工卡上？返回那张卡的文本框，认不出返回 None。
+
+        2026-11-12 00:24 实拍（GM急招）：橙色标签在桌游GM 图标左侧，
+        但脚本按旧规则点了当服务员，双倍工资没吃到。标签本身不写卡名，
+        所以按位置认：取离「急招」文本框中心最近的那张卡。
+        """
+        urgent = next((t for t in texts or []
+                       if "急招" in t.name.replace(" ", "")), None)
+        if urgent is None or not found:
+            return None
+        ucx = urgent.x + urgent.width / 2
+        ucy = urgent.y + urgent.height / 2
+        return min(found, key=lambda b: (b.x + b.width / 2 - ucx) ** 2
+                                      + (b.y + b.height / 2 - ucy) ** 2)
 
     def restaurant_preference(self, found, counts):
         """两张卡的优先顺序（`counts` 与 `found` 同序）→ (顺序, 选它的一句话原因)。

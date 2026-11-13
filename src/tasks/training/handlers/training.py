@@ -9,6 +9,7 @@ import time
 
 from ok.feature.Box import Box
 
+from src.tasks.training import attributes, roster
 from src.tasks.ui import labels
 from src.tasks.ui import zoom_reread
 
@@ -481,11 +482,20 @@ class TrainingHandlers:
         # 注意：这里读它只为了排行「当前值低的科目优先」，**不是**面板的刷新点。
         attr_values = dict(self.info.get("attrs") or {}) or self.read_attribute_values(texts)
 
+        # 属性取向（用户 2026-11-13）：位置需求属性 +0.5 进 score，
+        # 缺口不足阈值排除，过减半门槛打 0.5 折。阈值从配置读。
+        info = roster.lookup(self.configured_captain())
+        required = attributes.required_attrs(info.get("position"))
+        soft_cap = int(self.config.get("属性减半门槛"))
+        gap_limit = int(self.config.get("缺口排除阈值"))
+        caps = getattr(self, "_attr_caps", None) or {}
+
         def rank(name):
-            """分数 → 当前数值低的 → 屏幕上靠前的（兜底）。推荐属性已取消。"""
-            return self.subject_rank(self.subject_score(results.get(name)),
-                                     attr_values.get(name),
-                                     boxes[name].y)
+            score = self.subject_score(results.get(name),
+                                       required=name in required)
+            return attributes.subject_priority(
+                score, attr_values.get(name), caps.get(name), boxes[name].y,
+                soft_cap=soft_cap, gap_limit=gap_limit)
 
         # 候选池 = 小人 / 金边 / 彩边 / 当前已选（用户 2026-10-27：三种信号都算）
         # 但只保留**真正探测过**的科目：探测失败的名字没有分数，留在池里等于按 0 分
@@ -493,16 +503,28 @@ class TrainingHandlers:
         pool = [n for n in candidates if n in results]
         if not pool:
             pool = [current] if current in boxes else list(boxes)
-        name = max(pool, key=rank)
+        ranked = {n: rank(n) for n in pool}
+        ranked = {n: key for n, key in ranked.items() if key is not None}
+        if not ranked:
+            self.log_warning("六维都接近上限，没有可练的科目 → 按原顺序选")
+            ranked = {n: (self.subject_score(results.get(n)), 0, 0)
+                      for n in pool}
+        name = max(ranked, key=ranked.get)
         r = results.get(name) or self.empty_preview()
         # 2026-10-27：这一行必须同时打「金框」和「彩虹」。
         # 代码里彩框会让金框恒为 0（互斥），只打金框时彩框会被统计成「无框」，
         # 事后无法校准彩框权重（实测 118 次训练里彩框就是这么丢的）。
+        value = attr_values.get(name)
+        cap = caps.get(name)
+        gap = cap - value if cap is not None and value is not None else None
         self.log_info(
             f"选科目「{name}」（队友 {r['mates']}｜经理 {r['manager']}｜装备 {r['equip']}"
             f"｜满经验 {r['full']}｜金框 {r['gold']}｜彩虹 {int(r['crit'])}"
-            f"｜得分 {self.subject_score(r):.2f}"
-            f"｜当前值 {attr_values.get(name, '?')}）")
+            f"｜得分 {self.subject_score(r, required=name in required):.2f}"
+            f"｜当前值 {value if value is not None else '?'}"
+            f"/{cap if cap is not None else '?'}"
+            f"（缺口 {gap if gap is not None else '?'}）"
+            f"｜{'需求' if name in required else '普通'}）")
 
         # 若最佳科目不是当前选中的那个，先点一下选中（点两下会直接开练，
         # 所以统一只点一下，再按右上角「决定」）

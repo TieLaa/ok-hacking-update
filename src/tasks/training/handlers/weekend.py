@@ -11,6 +11,7 @@ import re
 import time
 
 from src.tasks.ui import labels
+from src.tasks.training import attributes, roster
 from src.tasks.training.places import activities
 
 
@@ -150,17 +151,24 @@ class WeekendHandlers:
     def handle_restaurant(self, texts):
         """餐厅内页：打工二选一（当服务员 / 桌游GM）。
 
-        用户 2026-11-03 口径（**通用**，不分流派）：
+        用户 2026-11-03 / 2026-11-13 口径（**通用**，不分流派）：
+        0. 卡片上有「急招！」→ **优先那张**（周末餐厅打工双倍）；
         1. 默认选**当服务员**（右边、耗精力、零用钱++）；
         2. **桌游GM**（左边）的队友比当服务员多两个及以上 → 优先桌游GM；
         3. 精力不够那张 → 改选另一张（规则细节在 `places/restaurant.py`）。
+        4. 急招卡不可选时：
+           - 这一趟是今天的主计划（`current_step.urgent=False`）→ 改打桌游GM；
+           - 这一趟是急招临时插队（`urgent=True`）→ 退出，回原计划。
         """
         if not self.restaurant_page(texts):
             return False
         self.mark_visited("餐厅")
-        order = self.restaurant_order(texts)
+        step = self._weekend.get("current_step")
+        allow_fallback = not bool(getattr(step, "urgent", False))
+        order = self.restaurant_order(texts, allow_fallback=allow_fallback)
         if not order:
-            self.log_warning("餐厅：两张卡今天都点不动（都提示精力不足）→ 退出餐厅",
+            mode = "急招插队" if not allow_fallback else "原计划"
+            self.log_warning(f"餐厅：{mode}，没有可选的卡 → 退出餐厅",
                              notify=True)
             self.exit_page()
             return True
@@ -242,9 +250,15 @@ class WeekendHandlers:
                             "detail": i.get("detail")} for i in fresh],
                     note="商店未登记商品")
 
+        info = roster.lookup(self.configured_captain())
         pick, reason = self.pick_shop_item(
             items, money, policy, stamina=bar.get("stamina"),
-            stamina_max=bar.get("stamina_max"))
+            stamina_max=bar.get("stamina_max"),
+            required=attributes.required_attrs(info.get("position")),
+            attrs=dict(self.info.get("attrs") or {}),
+            caps=getattr(self, "_attr_caps", None) or {},
+            soft_cap=int(self.config.get("属性减半门槛")),
+            gap_limit=int(self.config.get("缺口排除阈值")))
         if pick is None:
             self.log_info(f"商店：{reason}，关店")
             self.finish_shop(texts)
@@ -537,8 +551,13 @@ class WeekendHandlers:
             self.leave_street()
             return True
 
+        info = roster.lookup(self.configured_captain())
         best, detail, _all = self.gacha_candidates(
-            cards, stamina, stamina_max, money)
+            cards, stamina, stamina_max, money,
+            required=attributes.required_attrs(info.get("position")),
+            attrs=dict(self.info.get("attrs") or {}),
+            caps=getattr(self, "_attr_caps", None) or {},
+            gap_limit=int(self.config.get("缺口排除阈值")))
         if best is None:
             self.log_info(f"扭蛋：{detail} → 没有可买的"
                           f"（零用钱 {money}，精力 {stamina}），退出")
@@ -591,7 +610,13 @@ class WeekendHandlers:
 
         money = self.read_money(texts)
         cards = self.arcade_cards(texts)
-        pick, reason = self.pick_arcade_card(cards, money)
+        info = roster.lookup(self.configured_captain())
+        pick, reason = self.pick_arcade_card(
+            cards, money,
+            required=attributes.required_attrs(info.get("position")),
+            attrs=dict(self.info.get("attrs") or {}),
+            caps=getattr(self, "_attr_caps", None) or {},
+            gap_limit=int(self.config.get("缺口排除阈值")))
         if pick is None:
             self.log_warning(f"游戏厅：{reason}，退出")
             self.exit_page()
@@ -730,33 +755,24 @@ class WeekendHandlers:
         visited = st.setdefault("visited", set())
         day = st["date"][1] if st["date"] else None
 
-        # 今天去哪几个地点：**判断在 `training/places/map.py`**（决策模块）。
-        # 训练流要读当前精力/零用钱算缺口，所以把 texts 一起传进去。
-        places = self.today_places(day, st, texts)
-
-        # 今天已经去过的地方不再进：游戏厅没有可跳过的小游戏时会退回地图，
-        # 不记录「已去过」就会来回进出游戏厅（2026-10-26 实训）。
-        todo = [p for p in places if p not in visited]
-        # 2026-11-01 15:09：步行街**试过**（不管买没买成）就不再进第二次。
-        # 只按 `visited` 排除不够：买不到时如果不记 visited，会出现
-        # 「进步行街 → 失败 → 回地图 → 又点步行街」的无限循环。
-        # 买没买成由 `gacha_spent` 决定（买成了就不去餐厅打工，没买成就去）。
-        tried = st.setdefault("gacha_tried", set())
-        if "步行街" in tried and "步行街" in todo:
-            todo.remove("步行街")
-        if not todo:
+        # 今天要走的步骤：地图模块算主计划 + 急招 detour。
+        # visited / gacha_tried 的过滤已经收进 `weekend_plan`。
+        plan = self.weekend_plan(day, st, texts)
+        if not plan:
             # 地点都去过：停在周末地图上什么都不会发生（2026-10-26 卡死：
             # 地图被 story_arrow 当成剧情页连点 ▼，反复 50 秒）。
             # 点右上角返回周末首页，让当天结算。
+            st["current_step"] = None
             self.log_info(f"周末：{sorted(visited)} 都去过了 → 返回")
             self.exit_page()
             return True
 
         # 日志打**真实**星期：旧写法 `'日' if day == '日' else '六'` 把周五也印成
         # 「周末六」，排查「周五没进出行地图」时会把周五看成周六（2026-11-03）。
-        self.log_info(f"周末（星期{day or '读不到'}）：待去 {todo}（已去 {sorted(visited)}）")
-        todo = self.prefer_venue(texts, todo, day)
-        for place in todo:
+        self.log_info(f"周末（星期{day or '读不到'}）：待走 "
+                      f"{[s.place for s in plan]}（已去 {sorted(visited)}）")
+        for step in plan:
+            place = step.place
             # 只认「公园」「餐厅」这种**整框就是地点名**的按钮。
             # 2026-10-27 事故：地图页有对白「告诉她公园的草坪是假的」「要去野餐」，
             # match_text 的包含匹配会命中长句，click_box 点到句子中间（图上什么都没发生），
@@ -768,6 +784,8 @@ class WeekendHandlers:
             if target:
                 # 不在这里记 visited：要等地点的内页 handler 真认到标题才登记，
                 # 否则「点了没打开」也会被当成去过（2026-10-26 公园没打开就被跳过）。
+                # current_step 让餐厅 handler 知道这趟是主计划还是急招插队。
+                st["current_step"] = step
                 self.click_box(target, after_sleep=0.5)
                 self.log_info(f"周末点「{place}」（{self.style}）")
                 return True

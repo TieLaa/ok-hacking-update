@@ -134,26 +134,42 @@ class ArcadePlace:
                            f" 价格={price}")
         return cards
 
-    def pick_arcade_card(self, cards, money):
+    def pick_arcade_card(self, cards, money, required=None, attrs=None,
+                         caps=None, gap_limit=100):
         """选哪张小游戏？返回 (卡片, 原因) 或 (None, 原因)。
 
-        规则（用户 2026-11-03；2026-11-06 修订：**没有蓝**）：
+        规则（用户 2026-11-03；2026-11-06 修订：**没有蓝**；
+        2026-11-13 加属性取向）：
         - 只买「自动」+ 彩/金/紫 的卡；蓝/白不是兜底，是不买；
-        - **买的起的情况下**按 品质 → 有队友 → 队友多 → 奖励上限 排序；
+        - 该属性缺口不足 `gap_limit` 的卡不买（加了也溢出）；
+        - **买的起的情况下**按 品质 → 需求属性（0）→ 其他属性（1）
+          → 有队友 → 队友多 → 奖励上限 排序；
         - 免费（0 元）优先拿；价格读不到不猜；钱读不到不买（盲买是死循环）。
         """
+        required = set(required or ())
+        attrs = attrs or {}
+        caps = caps or {}
+
+        def usable(c):
+            cap, cur = caps.get(c["attr"]), attrs.get(c["attr"])
+            return not (cap is not None and cur is not None
+                        and cap - cur < gap_limit)
+
         ok_cards = [c for c in cards
-                    if c["auto"] and c["quality"] in self.ARCADE_QUALITIES]
+                    if c["auto"] and c["quality"] in self.ARCADE_QUALITIES
+                    and usable(c)]
         if not ok_cards:
             return None, ("没有「自动」+ 彩/金/紫 的小游戏（"
                           + "、".join(f"{c['attr']}/{c['quality']}"
                                       f"{'/自动' if c['auto'] else ''}"
                                       for c in cards) + "）")
 
-        # 品质永远第一档（2026-11-03）；同品质才比队友，队友一样多再比奖励上限。
+        # 品质永远第一档（2026-11-03）；同品质优先需求属性（2026-11-13），
+        # 再比队友，队友一样多再比奖励上限。
         auto_cards = sorted(
             ok_cards,
             key=lambda c: (-self.QUALITY_RANK.get(c["quality"], 0),
+                           0 if c["attr"] in required else 1,
                            -self._arcade_mates(c), -c["hi"]))
         for c in auto_cards:
             price = c["price"]

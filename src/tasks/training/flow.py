@@ -478,6 +478,8 @@ class TrainingFlowMixin:
         self._wheel_clicked_at = 0.0
         # 上一局的六维不能带进新的一局（换角色 / 换存档时监控页会显示别人的数值）。
         # 下一次进休息室会拍新快照（见 parsers.snapshot_lounge），很快就填回来。
+        # `_attr_caps`（六维上限）同理：不同角色上限不同，沿用上一局会算错缺口。
+        self._attr_caps = {}
         info = getattr(self, "info", None)
         if isinstance(info, dict):
             info.pop("attrs", None)
@@ -956,6 +958,7 @@ class TrainingFlowMixin:
         # 今天去过的地点：卡住的很可能就是「记成去过了、其实没进去」
         state = self.day_state()
         state["visited"] = set()
+        state["current_step"] = None
         self.log_info("干预纠错：已清掉当天拦路标记（商店试次/出行/笔记/科目/已去地点）")
 
     def _journal_click(self, record):

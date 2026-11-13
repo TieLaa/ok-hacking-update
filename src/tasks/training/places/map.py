@@ -18,9 +18,14 @@
     通用交互层        动作：选选项、按确定、按坐标退出
 """
 
+from collections import namedtuple
+
 from src.tasks.training.constants import (
     WEEKEND_MAIN_PLACE, WEEKEND_PARK_GAP, WEEKEND_PLAN, WEEKEND_WORK_MONEY_GATE)
 from src.tasks.ui import labels
+
+# 周末计划的一步：place=地点名，urgent=True=急招临时插队（不是今天的主计划）。
+WeekendStep = namedtuple("WeekendStep", "place urgent")
 
 
 class MapPlace:
@@ -224,6 +229,53 @@ class MapPlace:
         self.log_info(f"周末地点：没分出高下，按原顺序 {pair}")
         return places
 
+    # ---------- 今天的完整步骤（主计划 + 急招 detour） ----------
+
+    def weekend_plan(self, day=None, st=None, texts=None):
+        """今天要走的步骤（有序），每一步带 `urgent` 标记。
+
+        `today_places` / `prefer_venue` 只算**主计划**，不认识急招。
+        急招只在「主计划首选不是餐厅」时作为 detour 插到最前；
+        原主计划完整保留在后面。
+
+        为什么不在 today_places/prefer_venue 里插餐厅：
+        - `urgent` 要跟着具体步骤走，餐厅 handler 才知道这一趟是
+          “原计划就是打工”还是“急招临时插队”；
+        - 主计划逻辑保持纯函数，现有测试不用动。
+
+        用户 2026-11-13 口径：
+        - 原计划首选就是餐厅 → urgent=False，急招卡不可选时可改打桌游GM；
+        - 急招插队 → urgent=True，急招卡不可选时退出，回原计划。
+        """
+        if st is None:
+            st = self.weekend_state()
+        if day is None:
+            day = (st.get("date") or (None, None))[1]
+        visited = st.get("visited") or set()
+        tried = st.get("gacha_tried") or set()
+
+        # 先按原逻辑过滤「今天已经去过/试过」的地点，再算主计划。
+        places = self.today_places(day, st, texts)
+        places = [p for p in places if p not in visited]
+        if "步行街" in tried:
+            places = [p for p in places if p != "步行街"]
+        main = self.prefer_venue(texts, places, day)
+        if not main:
+            return []
+
+        # 主计划首选就是餐厅 → 不是 detour（商店流 / 钱不够 / 训练流缺口小）。
+        if main[0] == "餐厅":
+            return [WeekendStep(p, False) for p in main]
+
+        if (not self.venue_has_urgent(texts, "餐厅")
+                or "餐厅" in visited
+                or (self.style == "扭蛋流" and st.get("gacha_spent"))):
+            return [WeekendStep(p, False) for p in main]
+
+        self.log_info(f"周末：餐厅有「急招！」→ 插到最前（原首选 {main[0]}）")
+        return ([WeekendStep("餐厅", True)]
+                + [WeekendStep(p, False) for p in main if p != "餐厅"])
+
     # ---------- 地点名的框 ----------
 
     def _venue_box(self, texts, place):
@@ -233,3 +285,27 @@ class MapPlace:
             return box
         return next((t for t in texts
                      if place in t.name and len(t.name.strip()) <= 4), None)
+
+    def venue_has_urgent(self, texts, place="餐厅"):
+        """地点名字左侧有没有橙色「急招！」标签。
+
+        2026-11-12 实拍（1112-002429_handle_weekend.jpg）：标签在餐厅名字左侧、
+        同一水平带内（Δcy ≈ 0.06 屏高）。几何跟 `venue_on_discount` 一致，
+        只是关键字换成「急招」；标签必须在名字左边，别把台词里的「急招」算进来。
+        """
+        if not texts:
+            return False
+        box = self._venue_box(texts, place)
+        if box is None:
+            return False
+        cx = box.x + box.width / 2
+        cy = box.y + box.height / 2
+        for t in texts or []:
+            name = t.name.replace(" ", "")
+            if "急招" not in name:
+                continue
+            tcx = t.x + t.width / 2
+            tcy = t.y + t.height / 2
+            if tcx < cx and abs(tcy - cy) <= self.height * 0.12:
+                return True
+        return False

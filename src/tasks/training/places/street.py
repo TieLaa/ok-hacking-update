@@ -56,6 +56,7 @@
 """
 
 from src.tasks.ui import labels
+from src.tasks.training import attributes
 
     # 地点名（地图上的按钮文字 / 状态里的键）
 PLACE = "步行街"
@@ -99,7 +100,8 @@ class StreetPlace:
 
     # ---------- 买哪张卡（纯判断，不点击） ----------
 
-    def gacha_candidates(self, cards, stamina, stamina_max, money):
+    def gacha_candidates(self, cards, stamina, stamina_max, money,
+                         required=None, attrs=None, caps=None, gap_limit=100):
         """三张卡里哪些值得买、买哪张。
 
         返回 (best, detail, all_cards)：
@@ -113,6 +115,9 @@ class StreetPlace:
         """
         clear_limit = int(self.config.get("扭蛋清空精力阈值"))
         allow_clear = stamina is not None and stamina < clear_limit
+        required = set(required or ())
+        attrs = attrs or {}
+        caps = caps or {}
 
         # 品质优先级（配置项「扭蛋品质优先」，默认 彩色 > 金色 > 紫色）：
         # 列表 = 从高到低的品质名，分数按位置给（第一位 400、第二位 300……），
@@ -198,6 +203,14 @@ class StreetPlace:
             if why:
                 c["reject"] = why
                 continue
+            # 属性取向（2026-11-13）：该属性缺口不足阈值 → 不买（加了会溢出）。
+            target = attributes.item_attr_target(c.get("name"))
+            if target and target != "ALL":
+                cap, cur = caps.get(target), attrs.get(target)
+                if (cap is not None and cur is not None
+                        and cap - cur < gap_limit):
+                    c["reject"] = "缺口不足"
+                    continue
             # 读不到价格就不买：买不起时点「确定」游戏不扣钱、页面也不关，
             # 旧代码会一直「选卡 → 确定 → 没反应」（2026-10-26 实测）。
             # 2026-11-01 15:09：卡面先渲染、价格后渲染的那一拍价格是 None，
@@ -209,6 +222,8 @@ class StreetPlace:
             if money is not None and c["price"] > money:
                 continue
             c["score"] = score(c)
+            c["attr_rank"] = (0 if target == "ALL"
+                              else 1 if target in required else 2)
             ok.append(c)
 
         detail = "、".join(
@@ -229,7 +244,8 @@ class StreetPlace:
         # （`is_stamina_recover_card`）——「精力补充」这类**全部恢复卡 recover=0**，
         # 旧判据把它当成非恢复卡，反而排在所有恢复卡前面（同类 bug 的前提已消失）。
         best = max(ok, key=lambda c: (
-            c["score"], bool(c.get("enhanced")), c["mate"],
+            c["score"], -c.get("attr_rank", 2),
+            bool(c.get("enhanced")), c["mate"],
             not self.is_stamina_recover_card(c.get("effect")),
             recover_bonus(c), -c["price"]))
         return best, detail, cards
