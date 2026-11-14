@@ -450,14 +450,26 @@ class ShopPlace:
             pick = max(free_cash or paid_cash, key=lambda i: -i["y"])
             return pick, "必定优先拿（%s）" % pick["name"]
 
-        # 2026-11-13 用户口径：第 7 周周日是**最后一场比赛**，只买直接加
-        # 六维的属性商品（不分品质，蓝/白也买）；器材/教科书/牛奶/精力都
-        # 不再买（训练类在最后一天兑现不了）。缺口、余额、0 元规则照旧 ——
-        # 所以这里只换「类别」和「品质」两把闸，下面的管道继续走。
+        # 2026-11-14 用户口径（最后一周策略，**两层**）：
+        #   - **第 7 周整周**：不买器材、教科书、牛奶、精力（训练类兑现不了）；
+        #   - **第 7 周周日**（最后一场比赛）：同上，且属性商品**蓝色也买**。
+        # 所以周日 = 第 7 周规则 + 放开蓝色；不用去算「训练一天比赛一天」。
+        # 属性缺口、soft_cap 减半、余额、0 元商品规则照旧。
+        final_week = week is not None and week >= LATE_SHOP_FROM_WEEK
         final_match = week == SHOP_SEASON_WEEKS and day == "日"
-        if final_match:
+        if final_week:
             items = [i for i in items
-                     if self.item_category(i) == "attribute"]
+                     if i["price"] == 0
+                     or self.item_category(i) not in ("equipment_boost",
+                                                      "textbook", "milk",
+                                                      "stamina")]
+            if not items:
+                return None, "最后一周：店里只剩器材/教科书/牛奶/精力，关店"
+        if final_match:
+            # 0 元（红包）白送，不算购买，照拿（和「0 元照拿」的既有口径一致）
+            items = [i for i in items
+                     if i["price"] == 0
+                     or self.item_category(i) == "attribute"]
             if not items:
                 return None, "最后一场比赛：店里没有属性商品，关店"
 
@@ -526,7 +538,9 @@ class ShopPlace:
             quality = i.get("quality")
             if i["price"] == 0 or cat in self.SHOP_GROUP:
                 premium.append(i)
-            elif final_match or quality not in ("蓝", "白"):
+            elif final_match and quality != "白":
+                premium.append(i)
+            elif quality not in ("蓝", "白"):
                 premium.append(i)
         if not premium:
             return None, "只剩蓝/白商品了（默认不买蓝色）"
@@ -543,26 +557,31 @@ class ShopPlace:
             cat = self.item_category(i)
             slot = self.shop_slot(i["name"], cat)
             group = self.SHOP_GROUP.get(cat, 2)
-            quality = (0 if group != 2 or final_match
+            quality = (0 if group != 2
                        else self.SHOP_QUALITY_RANK.get(i.get("quality"), 9))
             # 2026-11-13：属性类内部 全属性 > 需求属性 > 专属饮料 > 奇妙秘籍 > 其他；
             # 缺口不足 `gap_limit` 的不买，过 `soft_cap` 的数值减半。
+            # 2026-11-14：**随机效果商品降到最后**（偶然饮料 = 随机一个属性+N，
+            # 期望值只有 N/6，还可能加到不需要的属性上）。
+            # 「专属饮料」（两个推荐属性+N）是**确定的**，保持原档。
             attr_sub = 0
             value = self.shop_value(i)
             if cat == "attribute":
                 target = self.shop_attr_target(i["name"])
-                if target == "ALL":
+                if attributes.is_random_effect(i["name"]):
+                    attr_sub = 5
+                elif target == "ALL":
                     attr_sub = 0
                 elif target in required:
                     attr_sub = 1
-                elif "专属" in i["name"]:
+                elif target == "PREFERRED" or "专属" in i["name"]:
                     attr_sub = 2
                 elif "奇妙" in i["name"]:
                     attr_sub = 3
                 else:
                     attr_sub = 4
                 cur, cap = attrs.get(target), caps.get(target)
-                if (target and target != "ALL"
+                if (target and target not in ("ALL", "PREFERRED")
                         and cur is not None and cap is not None):
                     if cap - cur < gap_limit:
                         continue

@@ -344,12 +344,26 @@ class WeekendHandlers:
         if not texts:
             return None
         name = item["name"]
+        # 详情面板的**第一行**是商品名（实测 cy=0.276，cx≈0.80），
+        # 效果文案在 cy≈0.58，中间是商品图。所以标题只从第一行里取。
         title = None
-        for t in texts:
+        title_row = [t for t in texts
+                     if self.SHOP_DETAIL_TITLE_ROW[0] <=
+                     (t.y + t.height / 2) / self.height <= self.SHOP_DETAIL_TITLE_ROW[1]]
+        for t in title_row:
             s = (t.name or "").strip()
             if s and (s == name or name in s or s in name):
                 title = s
                 break
+        if title is None:
+            # OCR 错字：商品卡名读成「大乐边」、详情标题读成「大乐透」。
+            # 2026-11-14 实跑：严格比对判不出来 → 详情整段作废 →
+            # 这张 60 币的现金类（大乐透）既没买也没进正常流程。
+            for t in title_row:
+                s = (t.name or "").strip()
+                if s and labels.name_matches_loose(name, s):
+                    title = s
+                    break
         if title is None:
             self.log_debug(f"商店：点「{name}」后详情标题对不上 → 不采信")
             return None
@@ -671,6 +685,12 @@ class WeekendHandlers:
         # 但周末首页的台词也含地点名（「告诉她公园的草坪是假的」），
         # 结果首页被判成地图、永远不点「出行」。现在统一用「有出行 = 首页」。
         if self.match_text(texts, "出行") is None:
+            return False
+        # 2026-11-14 用户口径（游戏设置）：第 7 周周日不能再出行，只进商店。
+        # 游戏里这页即使还露出「出行」也不点，避免空点。
+        week, day = self.current_day(texts)
+        if week == SHOP_SEASON_WEEKS and day == "日":
+            self.log_info("第7周星期日：不能再出行 → 不点「出行」")
             return False
 
         # 训练日里的额外出行（野上泷：周五也能出行）：一天只用一次。

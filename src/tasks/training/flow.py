@@ -477,6 +477,12 @@ class TrainingFlowMixin:
         # 「同一个 handler 连续命中」计数（STALL_LIMITS 用），换局必须清
         self._loop_handler = None
         self._loop_count = 0
+        # 旁路页面分类的缓存：换局重新记录「页面变化」，不要把上一局最后一页带进来
+        self._page_id = None
+        self._page_conflict = ()
+        # 选队长前的筛选流程（显示设定 → 筛选 → 重置 → 缩池 → 确定）
+        self._captain_filter_done = False
+        self._captain_filter_stage = None
         self._picked_subject = False
         self._picked_index = 0
         self._subject_confirmed_at = 0.0
@@ -1028,7 +1034,31 @@ class TrainingFlowMixin:
             for attr, default in defaults.items():
                 setattr(self, attr, default() if callable(default) else default)
 
+    def _note_page(self, texts):
+        """旁路页面分类：只记录「这一帧是什么页面」，不改变这一拍的动作。
+
+        2026-11-13 全局方案阶段 1：先把 PageID 和实际命中的 handler 对照，
+        差异清零后再把 `_handle_any` 切成「先分类、再分派」。
+        失败时只记 debug，绝不影响主流程。
+        """
+        from src.tasks.training.pages import classify_page      # 局部导入，避开导入环
+
+        try:
+            page, candidates = classify_page(self, texts)
+        except Exception as e:                                  # noqa: BLE001
+            self.log_debug(f"页面分类异常：{type(e).__name__}: {e}")
+            return
+        prev = getattr(self, "_page_id", None)
+        self._page_id = page
+        if page != prev:
+            self.log_info(f"页面分类：{prev or '?'} → {page or 'unknown'}"
+                          f"（候选 {list(candidates)}）")
+        elif len(candidates) > 1 and candidates != getattr(self, "_page_conflict", ()):
+            self.log_warning(f"页面分类冲突：{list(candidates)} → 暂取 {page}")
+        self._page_conflict = candidates
+
     def _handle_any(self, texts, frame=None):
+        self._note_page(texts)
         # 大厅子菜单（强化/招募/卡池…）：玩家自己点进去的，任务一律不动，
         # 也不要走「不认识的界面 → 点屏幕中央」兜底（2026-10-28 用户反馈：
         # 强化页被当成三选一点升级卡、招募页被 story_arrow 点了一下）。

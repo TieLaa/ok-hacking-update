@@ -22,7 +22,7 @@ from collections import namedtuple
 
 from src.tasks.training import params
 from src.tasks.training.constants import (
-    PARK_PICNIC_STAMINA, WEEKEND_MAIN_PLACE,
+    PARK_PICNIC_STAMINA, SHOP_SEASON_WEEKS, WEEKEND_MAIN_PLACE,
     WEEKEND_PARK_GAP, WEEKEND_PLAN, WEEKEND_WORK_MONEY_GATE, WORK_STAMINA_COST)
 from src.tasks.ui import labels
 
@@ -112,6 +112,12 @@ class MapPlace:
             day = (st.get("date") or (None, None))[1]
         # 读不到星期时按周六那一行兜底（商店流还按表走）。
         day = day or "六"
+        # 2026-11-14 用户口径（游戏设置，唯一策略）：第 7 周周日不能再出行，
+        # 只能进商店清空零花钱。所有流派都不规划地点。
+        week_now, day_now = self.current_day()
+        if week_now == SHOP_SEASON_WEEKS and day_now == "日":
+            self.log_info("第7周星期日：不能再出行 → 只进商店")
+            return []
         if self.style == "训练流":
             gap_places = self.training_weekend_places(texts, day, st)
             if gap_places is not None:
@@ -187,7 +193,8 @@ class MapPlace:
           - < `WEEKEND_WORK_MONEY_GATE`（360）→ **只去餐厅打工**；
           - ≥ 360 → 主地点。
         理由（一次步行街期望 3.3 颗、4 颗金 = 360 覆盖 78% 的触发轮次）见
-        `constants.WEEKEND_WORK_MONEY_GATE` 的注释。
+        `constants.WEEKEND_WORK_MONEY_GATE` 的注释。2026-11-13 试过 200，
+        但折扣不是每次发生，没折扣时只够买 2 颗，已回滚 360。
 
         **训练流**（2026-11-11 起）**不再经过这里**：缺口 < 30 固定去餐厅打工，
         候选里已经没有步行街/游戏厅。下面这条「只有一边打折就先去那边」
@@ -211,6 +218,14 @@ class MapPlace:
             if len(pair) < 2:
                 return places
             money = self.read_money(texts)
+            week, _ = self.current_day()
+            # 2026-11-14 用户口径（游戏设置）：第 7 周周六是最后一次出行，
+            # **不看零花钱**直接去主地点；没消费再退出回餐厅打工（下一站）。
+            if day == "六" and week == SHOP_SEASON_WEEKS:
+                self.log_info(
+                    f"周末地点（第7周）：最后一次出行 → 直接去「{main}」"
+                    "（没消费再退出回餐厅打工）")
+                return [main] + [p for p in places if p != main]
             if money is None:
                 self.log_info(f"周末地点：零用钱读不到 → 去「{main}」")
             elif money < WEEKEND_WORK_MONEY_GATE:

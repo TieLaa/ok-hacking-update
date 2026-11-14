@@ -86,10 +86,19 @@ class StreetPlace:
         退出 → 又回到训练日主界面，当天的外出白跑（用户：「进了出行地图然后
         就退回来了，又点了训练」）。
 
+        2026-11-14 修正：标题改成扭蛋页**专有**的「请选择1个扭蛋 / 超级扭蛋机」，
+        不再认「扭蛋」这种泛词 —— 「扭蛋加成」技能状态说明页（11:37:52 实跑）
+        会被误判成扭蛋页，在那页上找三张卡当然找不到，白丢一次扭蛋。
+        状态说明/结算页的字（「扭蛋加成」「获得了…」「购买了扭蛋…」）一律排除。
+
         地图上有 ≥2 个地点名，扭蛋页只有一个，用它区分。
         """
         if self.match_text(texts, labels.STREET_TITLE) is None:
             return False
+        for t in texts:
+            name = t.name.strip()
+            if any(w in name for w in labels.STREET_TITLE_EXCLUDE):
+                return False
         places = [t for t in texts
                   if t.name.strip() in labels.WEEKEND_PLACES]
         return len(places) < 2
@@ -203,9 +212,21 @@ class StreetPlace:
             if why:
                 c["reject"] = why
                 continue
+            # 流派专属卡（2026-11-14 用户口径）：**先判定流派**——
+            # 符合本流派的**优先买**，不符的**跳过**。
+            card_style = attributes.card_style_target(c.get("name"), c.get("effect"))
+            if card_style is not None and card_style != self.style:
+                c["reject"] = f"{card_style}流专属"
+                continue
             # 属性取向（2026-11-13）：该属性缺口不足阈值 → 不买（加了会溢出）。
             target = attributes.item_attr_target(c.get("name"))
-            if target and target != "ALL":
+            if target is None:
+                # 卡名认不出六维属性名时，用**效果文本**兜底（2026-11-14）：
+                # 「延迟满足」的效果是「5天后，全队成员获得全属性+13」，
+                # 实际是全属性卡（78 点），卡名认不出 → 归「其他专项」就输了。
+                target = attributes.effect_attr_target(c.get("effect"))
+            random_effect = attributes.is_random_effect(c.get("name"))
+            if target and target not in ("ALL", "PREFERRED", "CASH"):
                 cap, cur = caps.get(target), attrs.get(target)
                 if (cap is not None and cur is not None
                         and cap - cur < gap_limit):
@@ -222,8 +243,27 @@ class StreetPlace:
             if money is not None and c["price"] > money:
                 continue
             c["score"] = score(c)
-            c["attr_rank"] = (0 if target == "ALL"
-                              else 1 if target in required else 2)
+            # 属性子档（参考商店 `shop.pick_shop_item` 的 attr_sub）：
+            # 全属性 > 需求专项 > 推荐属性 > 其他专项 > **随机效果**。
+            # 「推荐属性」不再落进「其他」，否则同品质同价时会被卡片顺序
+            # 决定胜负（2026-11-13 实跑：金弹跳升级包赢了金推荐属性++）。
+            # 2026-11-14：随机效果（偶然饮料 = 随机一个属性+N）降到最后一档，
+            # 期望值只有 N/6，还可能加到不需要的属性上。
+            c["attr_rank"] = (4 if random_effect
+                              else 0 if target == "ALL"
+                              else 1 if target in required
+                              else 2 if target == "PREFERRED" else 3)
+            # 用户 2026-11-14：**增加零用钱的卡最高优先**（商店流/扭蛋流/小游戏流
+            # 都要零用钱买牛奶/秘籍）。它排在**品质之前** ——
+            # 2026-11-14 实跑「器材暴击++(金) vs 额外零用钱+(紫)」选了金卡，
+            # 零用钱才是这些流派的瓶颈。
+            # **训练流例外**：训练流不消费零用钱，零用钱卡没有价值。
+            money_first = self.style != "训练流"
+            c["money_rank"] = 1 if (money_first and target == "CASH") else 0
+            # 2026-11-14：**符合本流派的专属卡排最前**（流派优先，品质之前）。
+            # 例：训练流里「器材暴击++」比同品质的属性卡更该买（收益率不同）。
+            c["style_rank"] = 1 if (card_style is not None
+                                    and card_style == self.style) else 0
             ok.append(c)
 
         detail = "、".join(
@@ -238,13 +278,20 @@ class StreetPlace:
             return None, detail, cards
         # 取舍顺序（用户 2026-11-07 口径：**同等条件下恢复精力的优先级最低**，
         # 取代 2026-10-27/11-03 的「恢复卡同分要赢」；都相同再比价格）：
-        # 品质 → 增强款 → 队友 → **非恢复优先** → 恢复价值 → 便宜的。
+        # **流派专属卡** → **零用钱卡** → 品质 → 属性档 → 增强款 → 队友 →
+        # **非恢复优先** → 恢复价值 → 便宜的。
         # 非恢复卡恒为 1、恢复卡恒为 0，恢复卡只有池里全是恢复卡时才轮得到。
         # 2026-11-08 修：判据从 `recover > 0` 改成按效果文本
         # （`is_stamina_recover_card`）——「精力补充」这类**全部恢复卡 recover=0**，
         # 旧判据把它当成非恢复卡，反而排在所有恢复卡前面（同类 bug 的前提已消失）。
+        #
+        # 2026-11-14：流派专属卡（符合本流派）**在同品质里优先** ——
+        # 训练流的「器材暴击++」只有训练流吃得到（收益率不同），
+        # 同品质时比普通属性卡更该买；不符合流派的已在闸门那一步跳过。
+        # 注意**不跨品质**：训练增强（紫，+3 点）不该压过运控增加+++（金，+100）。
         best = max(ok, key=lambda c: (
-            c["score"], -c.get("attr_rank", 2),
+            c.get("money_rank", 0), c["score"], c.get("style_rank", 0),
+            -c.get("attr_rank", 2),
             bool(c.get("enhanced")), c["mate"],
             not self.is_stamina_recover_card(c.get("effect")),
             recover_bonus(c), -c["price"]))

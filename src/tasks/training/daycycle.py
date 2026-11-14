@@ -27,6 +27,7 @@ import time
 
 from src.tasks.ui import Defs, labels
 from src.tasks.training.constants import (SHOP_ENTRY_TRIES,
+                                          SHOP_SEASON_WEEKS,
                                           STYLE_BY_NAME)
 
 
@@ -219,8 +220,12 @@ class DayCycleMixin:
         # 判据：商店按钮**正上方**有「新品上市」提示（`places/shop.py: shop_fresh_badge`）。
         # 没提示 = 没上新 = 今天不进店。
         key = (week, day)
+        final_match = (week == SHOP_SEASON_WEEKS and day == "日")
+        # 判据：商店按钮**正上方**有「新品上市」提示（`places/shop.py: shop_fresh_badge`）。
+        # 没提示 = 没上新 = 今天不进店；**第 7 周周日例外**：游戏设置规定
+        # 最后一场比赛前不能出行，只能进商店清空零花钱（2026-11-14 用户口径）。
         badge, why = self.shop_fresh_badge(texts, box)
-        if badge is None:
+        if badge is None and not final_match:
             # 一天只打一行 INFO（DEBUG 没人翻；每拍打一条又会把日志刷满）
             if key != getattr(self, "_shop_nobadge_key", None):
                 self._shop_nobadge_key = key
@@ -243,9 +248,13 @@ class DayCycleMixin:
         self._shop_try_key, self._shop_try_count = key, tries
         self._shop_at = time.monotonic()
         self.click_box(box, after_sleep=0.9)
-        self.log_info(f"{week_tag}：看到「{badge.name.strip()}」→ 进店"
-                      f"（按「{self.config.get('商店购买策略')}」买｜星期{day or '?'}"
-                      f"｜第 {tries}/{SHOP_ENTRY_TRIES} 次点）")
+        if badge is not None:
+            self.log_info(f"{week_tag}：看到「{badge.name.strip()}」→ 进店"
+                          f"（按「{self.config.get('商店购买策略')}」买｜星期{day or '?'}"
+                          f"｜第 {tries}/{SHOP_ENTRY_TRIES} 次点）")
+        else:
+            self.log_info(f"{week_tag} 星期日：最后一场比赛 → 无条件进店"
+                          f"（只买属性商品｜第 {tries}/{SHOP_ENTRY_TRIES} 次点）")
         return True
 
     # ---------- 队长 / 流派：两条解析路径 ----------

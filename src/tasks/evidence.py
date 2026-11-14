@@ -269,7 +269,8 @@ class EvidenceSink:
                 json.dump({"round": self.round_id, "tag": tag, "note": note, "picked": picked,
                            "cards": [{"name": c.get("name"), "quality": c.get("quality"),
                                       "mates": c.get("mates"),
-                                      "x": c["box"].x, "y": c["box"].y}
+                                      "x": c["box"].x if c.get("box") is not None else None,
+                                      "y": c["box"].y if c.get("box") is not None else None}
                                      for c in (cards or [])]},
                           f, ensure_ascii=False, indent=2)
             return base

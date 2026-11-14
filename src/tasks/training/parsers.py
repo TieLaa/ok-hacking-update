@@ -174,6 +174,18 @@ class TrainingParsersMixin:
     SHOP_COLS = 3
     SHOP_ROWS = 2
     SHOP_MAX_ITEMS = SHOP_COLS * SHOP_ROWS
+    # 商品名在**价格正上方固定距离**处（2026-11-14 实拍 1548x871 商店帧）：
+    #   第一行：名 cy=0.277 / 价 cy=0.479 → 差 0.202
+    #   第二行：名 cy=0.543 / 价 cy=0.746 → 差 0.203
+    # 两行的绝对 cy 差很多，靠**相对价格的距离**才通用。
+    # 同时排除卡内图标上的字（cy=0.344，只比卡名低 0.067）——
+    # 2026-11-14 实跑「大乐透」的图标字被读成「大乐边」（置信度 0.78），
+    # 旧判据（取 y 最大）正好选中那个模糊框 → 名字对不上 →
+    # 详情标题校验失败 → 这张 60 币的现金类白丢。
+    SHOP_NAME_ABOVE_PRICE = (0.17, 0.24)
+    # 右侧详情面板的**第一行**是商品名（实测 cy=0.276），
+    # 效果文案在 cy≈0.58，中间是商品图。标题只在这一行里。
+    SHOP_DETAIL_TITLE_ROW = (0.22, 0.34)
 
     def read_money(self, texts):
         """顶栏金币：专注条右边的独立数字（不含斜杠）。"""
@@ -621,7 +633,22 @@ class TrainingParsersMixin:
                     and abs((n.x + n.width / 2) - px) < self.width * 0.10]
             if not near:
                 continue
-            name = max(near, key=lambda n: n.y)
+            # 商品名在**价格正上方固定距离**处（SHOP_NAME_ABOVE_PRICE）：
+            # 第一行名 cy=0.277/价 0.479，第二行名 cy=0.543/价 0.746，
+            # 相对距离都≈0.20；卡内图标上的字只低 0.067，靠距离排除。
+            # 2026-11-14 实跑「大乐透」的图标字被读成「大乐边」（置信度 0.78），
+            # 旧判据（取 y 最大）正好选中那个模糊框 → 名字对不上 →
+            # 详情标题校验失败 → 这张 60 币的现金类白丢。
+            pc_y = (pt.y + pt.height / 2) / self.height
+            title_row = [n for n in near
+                         if self.SHOP_NAME_ABOVE_PRICE[0] <=
+                         pc_y - (n.y + n.height / 2) / self.height <=
+                         self.SHOP_NAME_ABOVE_PRICE[1]]
+            if title_row:
+                name = min(title_row, key=lambda n: n.y)
+            else:
+                # 卡名行没读到（淡入/被裁）→ 退回同列最靠上的框
+                name = min(near, key=lambda n: n.y)
             quality, qh, qs = self.card_quality(name, pt)
             items.append({
                 "name": name.name.strip(),

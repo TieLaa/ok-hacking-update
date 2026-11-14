@@ -84,6 +84,50 @@ def name_matches(want, name):
     return a in b or b in a
 
 
+def name_matches_loose(want, name, max_diff=1):
+    """两个商品名是不是同一个 —— 在 `name_matches` 之外**容忍 1 个字的 OCR 错**。
+
+    2026-11-14 实跑：商品「大乐透」被 OCR 读成「大乐边」，`name_matches`
+    判不出来 → 详情面板的标题校验失败 → 详情整段作废 → 这张卡既不是
+    现金类（没买）也没进未登记样本的正常流程，白丢一次必拿的 60 币。
+
+    只用于**商品/卡片名**这种短词：编辑距离 ≤ 1 且长度 ≥ 3 才算命中，
+    避免「意识」和「意织」这种短词误配。
+    """
+    a, b = norm_name(want), norm_name(name)
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    if min(len(a), len(b)) < 3:
+        return False
+    return _edit_distance_le1(a, b)
+
+
+def _edit_distance_le1(a, b):
+    """两个字符串的编辑距离是否 ≤ 1（只允许插入/删除/替换各一次）。"""
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        diff = sum(1 for x, y in zip(a, b) if x != y)
+        return diff <= 1
+    # 长度差 1：短的那个必须是长的删一个字符后的结果
+    short, long = (a, b) if la < lb else (b, a)
+    i = j = 0
+    skipped = False
+    while i < len(short) and j < len(long):
+        if short[i] != long[j]:
+            if skipped:
+                return False
+            skipped = True
+            j += 1
+            continue
+        i += 1
+        j += 1
+    return True
+
+
 # ---------- 已知文本（页面/选项文案）----------
 WEEKEND_PLACES = ("餐厅", "游戏厅", "公园", "步行街")
 # 周末子页面
@@ -91,7 +135,15 @@ RESTAURANT_TITLE = ("在餐厅", "桌游GM", "当服务员")
 RESTAURANT_OPTIONS = ("当服务员", "桌游GM")
 PARK_TITLE = ("在公园", "干点什么好呢", "野餐")
 PARK_OPTIONS = ("野餐", "划船", "散步")
-STREET_TITLE = ("请选择1个扭蛋", "扭蛋")
+# 步行街扭蛋页的**标题**。2026-11-14 修正：原来还有「扭蛋」这种泛词，
+# 结果「扭蛋加成」技能状态说明页（11:37:52 实跑）被当成扭蛋页，
+# 在那页上找三张卡 → 一张都找不到 → 白丢一次扭蛋。
+# 现在只认扭蛋页专有的标题：
+#   - 「请选择1个扭蛋」/「请选择1个扭蛋i」（OCR 把 1 读成 i）；
+#   - 「超级扭蛋机」（点步行街后弹出的那台机器）。
+STREET_TITLE = ("请选择1个扭蛋", "超级扭蛋机")
+# 扭蛋页**排除项**：这些是状态说明/结算页上的字，不是标题。
+STREET_TITLE_EXCLUDE = ("扭蛋加成", "获得了", "购买了扭蛋")
 # 地图上步行街左上方的彩色爆炸标签：有它就**不管钱和队友**直接进步行街
 # （用户 2026-10-30 截图，第5周星期五，野上泷额外周末）。
 # 必须连**位置**一起判（见 weekend.venue_has_street_boost）：这个标签只贴在

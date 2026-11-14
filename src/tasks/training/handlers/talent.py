@@ -61,7 +61,7 @@ TALENT_OWNERS = {
     "异世界碎片": ("羽田朱志香",),
     "演唱会":    ("远野桐",),
     "汉堡券":    ("澪奈贾妮丝",),
-    "占卜":      ("先斗月绮",),
+    "占卜":      ("卧云真昼",),        # 占卜时间「确定」，handle_divination（用户 2026-11-13 口径）
     "龙宫寺集团": ("龙宫寺心叶",),
     # ---- 2026-11-13 夜间实测补齐 ----
     "建设达人":  ("百目鬼剑",),        # 工地「进行施工」，handle_construction
@@ -703,3 +703,27 @@ class TalentHandlers:
         return True
 
     # ==================== 工地施工结束 ====================
+
+    # ==================== 占卜（天赋「占卜」：卧云真昼） ====================
+
+    def handle_divination(self, texts):
+        """天赋「占卜」的结果页：点「确定」拿奖励。
+
+        用户 2026-11-13 口径：这是**卧云真昼**的天赋事件【占卜】
+        （`TALENT_OWNERS` 原来写成先斗月绮，已按实跑更正）。
+        实拍（2026-11-13 16:45，第 1 周星期四，1548x871）：
+            「占卜时间 / 中吉 / 训练基础值+2 / 确定」——整页只有「确定」一个按钮。
+        旧版没人认领：`handle_popup` 有「确定」时故意不点（留给具体 handler），
+        unknown 兜底点屏幕中央 (774,435) 点不中 (737,731) 的「确定」，
+        接管 3 次后任务自停。
+        """
+        if self.match_text(texts, "占卜时间") is None:
+            return False
+        confirm = self.exact_text(texts, labels.BUTTONS["confirm"])
+        if confirm is None:
+            return False
+        self.click_box(confirm, after_sleep=0.5)
+        self.log_info("占卜：点「确定」")
+        return True
+
+    # ==================== 占卜结束 ====================

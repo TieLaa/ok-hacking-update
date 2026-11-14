@@ -15,7 +15,7 @@
 
 import time
 
-from src.tasks.ui import labels
+from src.tasks.training import page_signatures
 
 # handler 是**函数**（注册表里按 `handler(self, texts)` 调），不是绑定方法，
 # 所以限流/锁只能放在模块级，不能用 `self.UNMARK_INTERVAL` 这种类属性。
@@ -33,11 +33,16 @@ class UnmarkedHandlers:
         # 邻页排除（用户 2026-11-03 实跑暴露）：扭蛋/商店/游戏厅/地图/餐厅/队伍/
         # 结算这些页面同样是「2~3 张上色卡」，但点下去会花钱或改阵容。
         # 专属 handler 正常时轮不到这里；**只有它没认出来的那一拍**才靠这层兜底。
-        if self.match_text(texts, labels.QUALITY_CARD_EXCLUDE) is not None:
+        # 阶段 2：那 36 个词收口到 `page_signatures` 的 `exclusive_page` 签名，
+        # 这里不再自己维护一份。
+        if page_signatures.page_has(self, texts, "exclusive_page"):
             return False
-        if len([t for t in texts
-                if t.name.strip() in labels.WEEKEND_PLACES]) >= 2:
+        if page_signatures.page_has(self, texts, "weekend_map"):
             return False
+        # 「下一步」不收进签名表（2026-11-14 实测）：锦标赛对阵图只有
+        # 「下一步」而没有「关卡加成/奖励预览」，收进去会把 match_result
+        # 挤掉、让 handle_result 抢走（docs/shots/2026-10-26-bracket.png）。
+        # 「下一步」是「这页有推进按钮」，不是某个页面的身份。
         if self.match_text(texts, "下一步") is not None:
             return False
 

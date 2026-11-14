@@ -5,6 +5,8 @@
 """
 
 
+from src.tasks.training import roster
+from src.tasks.training import page_signatures
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
 
@@ -73,18 +75,22 @@ class EntryHandlers:
         4. 唯一可靠的特征是**底部台词条里的一行长中文**：y 0.72~0.96、12 字以上。
 
         训练日/科目页/赛程页底部也有文字（属性、按钮），所以先排除这些关键词。
+
+        2026-11-14 阶段 2 验证结论（50 张回归图逐张对比，赢家+动作全等）：
+        - 「失败率 / 决定 / 休息 / 赢得比赛 / VS」这组**正文关键词**已删 ——
+          它们在别的页面也出现，删掉不影响分派（专属 handler 排在本 handler 前面，
+          顺序本身就保证专属的先赢）。
+        - 「关卡加成 + 奖励预览」「地点名×2」这两条**不能删** —— 它们是
+          **页面级强特征**，区分的是两个不同的页面（全国大赛关卡列表页 /
+          周末地图页）。删掉后 2026-10-27-race-ladder.png 会被当成剧情页，
+          去点「奖励预览」附近的空白（2026-10-27 实跑就是每 0.5 秒点右下角）。
+          这条经验就是阶段 2 的判据：**排除条件分两类** ——
+          「正文关键词」可删（靠顺序兜底），「页面级强特征」不可删。
         """
-        if self.match_text(texts, ("失败率", "决定", "休息", "赢得比赛", "VS")) is not None:
-            return False
-        # 赛事关卡详情页（全国大赛关卡列表）右下角常有一片白色（卡片边缘/滚动条），
-        # has_story_arrow 会判成 ▼，于是每 0.5 秒点右下角（2026-10-27 实机）。
-        # 这一页的强特征：右侧信息栏「关卡加成」+「奖励预览」。
-        if (self.match_text(texts, "关卡加成") is not None
-                and self.match_text(texts, "奖励预览") is not None):
-            return False
         # 周末地图：地点名是导航，不是可推进的剧情。
         # 2026-10-26 卡死：地图上被当成剧情页连点 ▼，反复 50 秒才被看门狗救回来。
-        if len([t for t in texts if t.name.strip() in labels.WEEKEND_PLACES]) >= 2:
+        # （阶段 2：这条和上面的「关卡加成+奖励预览」都收口到 `page_signatures`。）
+        if page_signatures.page_is_other(self, texts, "story_arrow"):
             return False
 
         # 训练事件 / 只有 ▼ 的剧情页（实机 2026-10-26）：右下角白色 ▼ 是最可靠的信号。
@@ -212,6 +218,16 @@ class EntryHandlers:
             return self.stop_for_no_captain("训练核心（选队长）")
 
         want = self.configured_captain()
+        if want and not getattr(self, "_captain_filter_done", False):
+            # 2026-11-13 用户流程：选队长前先「显示设定 → 筛选」，按稀有度
+            # 和位置把卡池缩小，再走原来的逐张找名字（不在池里才停）。
+            target = self.match_text(texts, "筛选")
+            if target is not None:
+                self.click_box(target, after_sleep=0.5)
+                self._captain_filter_stage = "tab"
+                self.log_info("选队长：打开筛选")
+                return True
+            self.log_warning("选队长：没认出「筛选」按钮 → 直接逐张找")
         if want and self.pick_captain_by_name(want):
             self._captain_matched_config = True
             return True
@@ -237,6 +253,115 @@ class EntryHandlers:
         # 选完队长后按钮可能移动，重新 OCR 再点「下一步」
         ok = self.click_button_and_expect("next", ("选择队友",), timeout=8)
         self.log_info("进入选择队友" if ok else "点「下一步」没反应")
+        return True
+
+    def handle_captain_filter(self, texts):
+        """选队长前的「显示设定 → 筛选」：重置 → 按稀有度/位置缩池 → 确定。
+
+        用户 2026-11-13 流程：启程 → 筛选 → 筛选页签 → 重置 →
+        按队长稀有度点 SR/SSR + 位置 5 选 1 → 确定 → 原来的逐张找名字。
+        分拍执行（每拍一个动作），避免面板动画/OCR 抖动时连点错。
+        """
+        if self.match_text(texts, "显示设定") is None:
+            return False
+        stage = getattr(self, "_captain_filter_stage", None)
+        if stage is None:
+            return False        # 用户手动打开的面板，不碰
+
+        if stage == "tab":
+            if self.match_text(texts, "显示顺序") is not None:
+                tab = self._filter_text(texts, "筛选", region="settings_tabs")
+                if tab is not None:
+                    self.click_box(tab, after_sleep=0.3)
+            self._captain_filter_stage = "reset"
+            return True
+
+        if stage == "reset":
+            reset = self._filter_text(texts, "重置")
+            if reset is not None:
+                self.click_box(reset, after_sleep=0.4)
+            self._captain_filter_stage = "choose"
+            return True
+
+        if stage == "choose":
+            self._choose_captain_filters(texts)
+            self._captain_filter_stage = "confirm"
+            return True
+
+        if stage == "confirm":
+            confirm = self._filter_text(texts, "确定")
+            if confirm is not None:
+                self.click_box(confirm, after_sleep=0.5)
+            else:
+                cancel = self._filter_text(texts, "取消")
+                if cancel is not None:
+                    self.click_box(cancel, after_sleep=0.4)
+                self.log_warning("选队长筛选：没找到「确定」，已取消面板")
+            self._captain_filter_done = True
+            self._captain_filter_stage = None
+            self.log_info("选队长：筛选完成，回训练核心")
+            return True
+        return False
+
+    def _choose_captain_filters(self, texts):
+        """重置后是**全不选**：只勾队长对应的稀有度和位置。
+
+        2026-11-14 实跑：近江奏 SR/分卫，旧逻辑按「重置后全选、取消其他」
+        写，结果点 R/SSR 反而把它们勾上，SR 没勾。重置的真实语义是清空。
+        """
+        info = roster.lookup(self.configured_captain())
+        rarity = (info.get("rarity") or "").upper()
+        position = info.get("position") or ""
+        if rarity in ("SSR", "SR", "R"):
+            self._click_filter_text(texts, rarity)
+        if position in ("控卫", "分卫", "小前", "大前", "中锋"):
+            self._click_filter_text(texts, position)
+        else:
+            self.log_warning(
+                f"选队长筛选：roster 里查不到「{self.configured_captain()}」"
+                f"（rarity={rarity or '?'} position={position or '?'}）"
+                "→ 只勾了稀有度，位置保持全不选")
+
+    def _filter_text(self, texts, name, region=None):
+        """筛选面板里的文字框；OCR 没认出时用截图实测坐标兜底。"""
+        source = texts if region is None else self.texts_in_region(texts, region)
+        target = self.exact_text(source, (name,))
+        if target is not None:
+            return target
+        coords = None
+        if name in Defs.CAPTAIN_FILTER["rarity"]:
+            coords = Defs.CAPTAIN_FILTER["rarity"][name]
+        elif name in Defs.CAPTAIN_FILTER["position"]:
+            coords = Defs.CAPTAIN_FILTER["position"][name]
+        elif name == "重置":
+            coords = Defs.CAPTAIN_FILTER["reset"]
+        elif name == "确定":
+            coords = Defs.CAPTAIN_FILTER["confirm"]
+        elif name == "筛选":
+            coords = Defs.CAPTAIN_FILTER["tab"]
+        if coords is None:
+            return None
+        return self.box_of_screen(coords[0], coords[1], coords[0], coords[1])
+
+    def _click_filter_text(self, texts, name):
+        """点复选框的小方块中心（文字本身不切换勾选）。
+
+        稀有度/位置：OCR 找到标签文字时，点文字框左侧的小方块中心
+        （截图实测偏移约 0.0137w）；OCR 没找到时用截图坐标兜底。
+        """
+        box = self._filter_text(texts, name)
+        if box is None:
+            self.log_warning(f"选队长筛选：没找到「{name}」")
+            return False
+        if (box.width > 0
+                and (name in Defs.CAPTAIN_FILTER["rarity"]
+                     or name in Defs.CAPTAIN_FILTER["position"])):
+            from ok.feature.Box import Box
+            cx = int(box.x - self.width * 0.0137)
+            cy = int(box.y + box.height / 2)
+            box = Box(x=cx - 2, y=cy - 2, width=4, height=4,
+                      name=f"{name}复选框")
+        self.click_box(box, after_sleep=0.15)
         return True
 
     def pick_captain_by_name(self, want, pages=4):
@@ -387,7 +512,9 @@ class EntryHandlers:
         # 包含匹配会把那一页也当成选择笔记页，反复点下一步（2026-10-29 实机）。
         if self.exact_text(texts, ("选择笔记",)) is None:
             return False
-        if self.match_text(texts, "确认编队") is not None:
+        # 「确认编队」页有「未选择笔记 / 请携带笔记一起训练吧」——
+        # 阶段 2：收口到签名表（`confirm_team`），各页面只声明一次。
+        if page_signatures.page_has(self, texts, "confirm_team"):
             return False
         if self.no_captain_mode:
             return self.stop_for_no_captain("选择笔记")

@@ -11,6 +11,7 @@ import os
 import cv2
 import numpy as np
 
+from src.tasks.training import page_signatures
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
 
@@ -157,7 +158,7 @@ class MatchHandlers:
             self.log_info("活动赛：继续匹配")
             self._match_intro_at = 0.0          # 上一局的开场窗口作废
             return True
-        if self.match_text(texts, ("失败率", "决定", "休息")) is not None:
+        if page_signatures.page_is_other(self, texts, "match_result"):
             return False
         # 锦标赛对阵图：只有「赛程已完成 / 距离下场比赛 / 下一场」和学校名，
         # 没有「结算/赛程」这种整词标题，旧判据认不出来会被事件 handler 当成竖排选项。
@@ -804,62 +805,36 @@ class MatchHandlers:
         if any(len(t.name.strip()) <= 8 and any(w in t.name for w in place_words)
                for t in texts):
             return False
-        # 限时比赛活动赛程页（2026-11-03 用户截图）：「暂时退出 / 继续匹配」并排，
-        # 没有「下一步」。这一页交给 handle_match_result 点「继续匹配」；
-        # 一旦落到这里，choice_candidates 会把「暂时退出」当竖向选项点掉
-        # （= 直接退出活动）。只要看到其中一个，就说明不是事件选项页。
-        if self.match_text(texts, ("继续匹配", "暂时退出")) is not None:
-            return False
         # 周末地图：地点名是导航，不是选项（2026-10-26 把「游戏厅/公园」当选项点了）。
         if len([t for t in texts if t.name.strip() in labels.WEEKEND_PLACES]) >= 2:
+            return False
+        # ---- 阶段 2：互斥声明收口到 `page_signatures` ----
+        # 原来这里有 20 个排除词（失败率 / 决定 / 上新时间 / 能力详情 /
+        # 继续匹配 / 暂时退出 / 关卡加成 / 奖励预览 / 对手实力 / 前往挑战 /
+        # 本周总结 / 球队评分 / 球员 / 位置 / 评分 / 下一步 / main_action…），
+        # 全是在说「我不是这些页面」。现在改成一次签名查询：
+        # 「这一帧命中了别的页面签名吗」。
+        # 签名表在 `src/tasks/training/page_signatures.py`，各页面只声明一次。
+        if page_signatures.page_is_other(self, texts, "event_choice"):
             return False
         # 训练科目页也有黄色卡片（器材卡）和底部属性面板，但它们不是选项。
         # 科目页必有「失败率」，并且「决定」是**独立的按钮框**（实训 2026-10-26）。
         # 2026-10-27 事故（第3周「球星卡训练事件·广播站支持」）：正文里有
         # 「成功后，决定通过广播站平台支持球队。」——旧判据用包含匹配找「决定」，
         # 把事件页当成科目页直接 return False，结果 3 次点屏幕中央没反应、卡死停止。
-        if self.match_text(texts, "失败率") is not None:
-            return False
+        # 「决定」必须是**独立按钮框**（正文里的不算），所以单独判。
         if self.exact_text(texts, labels.BUTTONS["decide"]) is not None:
             return False
-        if self.match_text(texts, ("上新时间", "能力详情")) is not None:
-            return False
-        # 炒股选股页（天赋「股神!」，2026-11-08 实跑）：标题三张卡名 + 股票名 +
-        # 卡片说明全在 cx≈0.50 那一列，形态判据「竖向 3 选 1」会认领它，
-        # 于是每拍只点中间那张卡、从不点「确定」→ 连点 120+ 次、接管 3 次后停任务
-        # （logs/debug/1108-231656_noresp3s）。这一页归 handle_stock_pick：
-        # 按队友数选卡**再点确定**。注册表顺序已把它排在本 handler 之前，这里是第二道闸。
-        if self.match_text(texts, labels.STOCK_PICK_TITLE) is not None:
-            return False
+        # 右下角主按钮（VS / 比赛 / 训练）是训练日主界面、比赛开场页的特征。
         if self.match_text(self.texts_in_region(texts, "main_action"),
                            ("VS", "比赛", "训练")) is not None:
             return False
         # 2026-10-27 事故（第2周周日划船结算页）：中间「工资／获得／获得」
-        # 三行奖励条目被 choice_candidates 当成竖向三选一，连点 9 次都不动，
+        # 三行奖励条目被 choice_candidates 当成竖排三选一，连点 9 次都不动，
         # 任务被判卡死停止。结算页底部一定有「下一步」，事件选项页没有。
+        # 「下一步」是**推进按钮**，很多页面都有（结算/商店/公告…），
+        # 放签名表会把事件页也排除掉，所以单独判。
         if self.match_text(texts, "下一步") is not None:
-            return False
-
-        # 2026-10-27 事故（QuickMatch 挂在全国大赛关卡列表）：右侧信息栏
-        # 「对手实力 / 关卡加成 / 奖励预览」同列竖排、短文本，全中 choice_candidates
-        # 的形态判据，被当成竖向三选一，每 0.5 秒点一次「对手实力」（点了 30 秒没反应，
-        # TriggerTask 没有看门狗，只能等人发现）。赛事/关卡详情页同时有这几个标题。
-        if (self.match_text(texts, "关卡加成") is not None
-                and self.match_text(texts, "奖励预览") is not None):
-            return False
-        if (self.match_text(texts, "对手实力") is not None
-                and self.match_text(texts, "前往挑战") is not None):
-            return False
-        # 本周总结页（球队评分表格）：左列竖排「控卫／分卫／小前／大前／中锋」，
-        # 同一列、2 字短文本，被 choice_candidates 当成竖向三选一，
-        # 每拍点一次「控卫」连点 4~5 下（2026-10-27 00:02 实机）。
-        # 页面在播动画（分数 4771→5937、文字每拍都在变），看门狗的
-        # 「3 次无变化」判不出来，只能靠页面特征排除。
-        if self.match_text(texts, ("本周总结", "球队评分")) is not None:
-            return False
-        if (self.match_text(texts, "球员") is not None
-                and self.match_text(texts, "位置") is not None
-                and self.match_text(texts, "评分") is not None):
             return False
         # ---- 竖向 2/3 选 1（白底彩边，跳过是灰的）----
         # **不要求白底**：事件页背景有时偏暖/偏暗，_has_white_band 会漏判；
