@@ -48,7 +48,26 @@ def _load():
 
 def lookup(name):
     """按角色名查 `{position, preferred, style, rarity}`；查不到返回 `{}`。"""
+    return all_rows().get((name or "").strip(), {})
+
+
+def all_rows():
+    """全部角色 `{名字: {position, preferred, style, rarity}}`（首次调用才读盘）。"""
     global _CACHE
     if _CACHE is None:
         _CACHE = _load()
-    return _CACHE.get((name or "").strip(), {})
+    return _CACHE
+
+
+def style_by_name():
+    """`{名字: 流派}`，只含采到 `style_tag` 的角色。
+
+    2026-11-14：取代 `constants.STYLE_BY_NAME`。日历只显示姓氏，
+    `parsers.style_for_name` 仍按这里的前缀匹配。
+    """
+    return {n: r["style"] for n, r in all_rows().items() if r.get("style")}
+
+
+def position_by_name():
+    """`{名字: 位置}`，取代 `constants.POSITION_BY_NAME`。"""
+    return {n: r["position"] for n, r in all_rows().items() if r.get("position")}

@@ -40,7 +40,7 @@ class UnmarkedHandlers:
         if page_signatures.page_has(self, texts, "weekend_map"):
             return False
         # 「下一步」不收进签名表（2026-11-14 实测）：锦标赛对阵图只有
-        # 「下一步」而没有「关卡加成/奖励预览」，收进去会把 match_result
+        # 「下一步」而没有「关卡加成/奖励预览」，收进去会把 stage_list
         # 挤掉、让 handle_result 抢走（docs/shots/2026-10-26-bracket.png）。
         # 「下一步」是「这页有推进按钮」，不是某个页面的身份。
         if self.match_text(texts, "下一步") is not None:

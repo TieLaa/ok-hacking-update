@@ -1,14 +1,22 @@
-"""页面分类（Page Registry）——**旁路阶段**：只认页面，不点击、不改控制流。
+"""页面分类（Page Registry）—— 页面 → 锚点的**唯一出处**。
 
 为什么要有这一层（2026-11-13 全局方案）：
-    现在 30+ 个 handler 各自在内部判断「这是不是我的页面」，判据散落、
+    之前 30+ 个 handler 各自在内部判断「这是不是我的页面」，判据散落、
     互不知道对方的边界；冲突只能靠 `HANDLERS` 顺序和一条条排除条件消化。
     结果是每撞一次事故就补一条排除（2026-11-13「在公园」正文让事件页
     被跳过、又被当成周末地图，就是典型）。
 
-    这里先把「页面 → 锚点」集中到一张表，**旁路运行**：
-    每拍算一个 PageID 写日志，和实际命中的 handler 对照。
-    等差异清零，再把 `_handle_any` 切到「先分类、再分派」。
+2026-11-14 阶段 2：从旁路变成**执行路径**。
+    `flow._handle_any` 现在是「先分类成 PageID，再按 PageID 路由到
+    对应的 handler」；路由到的 handler 跑不到就照旧全量顺序遍历。
+
+    **分类器只当加速器，绝不排除任何 handler** —— 顺序遍历里沉淀了
+    踩坑的教训（「共用『下一步/确定』的必须排在专属 handler 之后」），
+    丢掉它就等于丢掉那些教训。最坏情况 = 改之前的行为。
+
+    页面 → handler 的对应在 `page_handlers.py`；
+    路由的回归门禁在 `tools/check_route.py`（跑真实流程，
+    因为 handler 之间有状态，单独跑每个 handler 测不出顺序变化）。
 
 判据约定（和 docs/ENGINEERING.md §3.1 一致）：
 - 锚点只用 **UI 词/形态**（整框按钮、黄色边框、整框地点名），
@@ -17,7 +25,10 @@
 - 多个页面同时命中时按 `PRIORITY` 取第一个，但把 candidates 一起返回——
   旁路日志会把它打出来，这就是「判据重叠」的可观测入口。
 
-只登记了首批高频/出过事的页面；其余页面返回 None，仍走现有 handler。
+**识别率**（2026-11-14）：
+- 实跑存证帧 2785 张，认对 95.5%（`tools/check_pages.py`）
+- 人工确认过的回归图 49 张，认对 95.9%
+剩下认不出的是过渡态（悬停浮层、剧情开场），本来就没有稳定的页面身份。
 """
 
 from src.tasks.ui import Defs, labels
@@ -31,28 +42,56 @@ from src.tasks.ui import Defs, labels
 # 独有标题（整句、只出现在那一页）：
 #   请选择1个技能 / 请选择一种加强训练 / 赛前准备 / XX的训练计划 / 请选择1个扭蛋
 PRIORITY = {
+    # 专注不足弹框排在最前：它叠加在任何页面上，必须先处理
+    "stamina_short": 5,
     "game_title": 10,
     "construction": 20,
     "register_player": 25,
     "result": 30,
-    # --- 以下四个是独有整句标题 ---
+    # --- 独有整句标题 ---
     "boost_training": 35,
     "prepare": 40,
     "skill_select": 42,
     "result_page": 45,
     "training_plan": 48,
-    # --- 以下靠通用关键词，排在标题页之后 ---
-    "match_result": 50,
-    "boost_status": 52,
-    "training_subject": 55,
-    "event_choice": 60,
-    "weekend_map": 65,
-    "go_out": 66,
+    "announcement": 49,
+    "theme_select": 51,
+    "ingredient_select": 52,
+    "izumi_question": 53,
+    "stock_pick": 54,
+    "spin_wheel": 56,
+    "arcade": 57,
+    "manuscript_submit": 58,
+    "training_entry": 59,
+    "lobby": 61,
+    # 度假页要在 story_arrow 之前 —— 它也有右下角 ▼，但要点的是主按钮
+    "vacation": 62,
+    "captain_filter": 63,
+    "breath_difficulty": 64,
+    # --- 靠通用关键词，排在标题页之后 ---
+    "match_result": 65,
+    "boost_status": 66,
+    "training_subject": 67,
+    "event_choice": 68,
+    "weekend_map": 66,
+    "go_out": 67,
     "restaurant": 70,
     "street": 80,
     "park": 90,
+    "park_detail": 91,
     "shop": 100,
     "story_arrow": 120,
+    "popup": 125,
+    # 训练日主界面最后：很多页面都有「训练」这个词，必须让专属页面先认
+    "training_hub": 140,
+    # --- 需要组合判据的（两三个词同时出现才算）---
+    "stage_list": 130,
+    "confirm_team": 131,
+    "equipment": 132,
+    "team": 133,
+    "note_study": 134,
+    "captain": 135,
+    "rest_confirm": 136,
 }
 
 
@@ -64,6 +103,216 @@ def _short_place_names(texts):
 
 
 # ---------- 每个页面的锚点 ----------
+
+def _is_captain(task, texts):
+    """选队长页：整框「训练核心」。
+
+    必须**整框**：`match_text` 的「整段拼接」兜底会把训练日主界面里
+    「…都给我好好训练…」「核心评分提升！」拼成「训练核心」，
+    于是主界面被当成选队长页（`handlers/entry.py: handle_captain` 同源判据）。
+    """
+    return task.exact_text(texts, ("训练核心",)) is not None
+
+
+def _is_training_entry(task, texts):
+    """训练剧本页（大厅 → 训练）：「训练剧本」+ 右下「启程」。
+
+    单看「训练剧本」不够 —— 训练日台词也会提到「训练剧本」。
+    """
+    if task.match_text(texts, "训练剧本") is None:
+        return False
+    return task.exact_text(texts, ("启程",)) is not None
+
+
+def _is_lobby(task, texts):
+    """大厅（首页子菜单）：「赛事 / 社团GO / 新人抽奖 / 转一圈 / 冠军之路」。
+
+    新版大厅的「社团GO」有时 OCR 读不到，只靠它会在主界面空转
+    （实测 2026-10-26）。
+    """
+    return task.match_text(texts, ("赛事", "社团GO", "新人抽奖",
+                                   "转一圈", "冠军之路")) is not None
+
+
+def _is_arcade(task, texts):
+    """游戏厅（需「强化」里解锁）：标题「请选择一个小游戏 / 幸运小游戏」。"""
+    return task.match_text(texts, labels.ARCADE_TITLE) is not None
+
+
+def _is_stage_list(task, texts):
+    """锦标赛对阵图（关卡列表页）：「赛程已完成 / 距离下场比赛 / 挑战中」。
+
+    这一页只有「下一步」和学校名，没有「结算/赛程」这种整词标题，
+    旧判据认不出来会被事件 handler 当成竖排选项。
+    """
+    return task.match_text(texts, ("赛程已完成", "距离下场比赛",
+                                   "挑战中")) is not None
+
+
+def _is_confirm_team(task, texts):
+    """确认编队页：整框「确认编队」+「开始训练」。
+
+    「确认编队」单独出现不够 —— 选器材/选笔记页也会出现这个词。
+    """
+    if task.match_text(texts, "确认编队") is None:
+        return False
+    return task.match_text(texts, "开始训练") is not None
+
+
+def _is_equipment(task, texts):
+    """选器材页：整框「选择器材」+「自动选择」。"""
+    if task.match_text(texts, "选择器材") is None:
+        return False
+    return task.match_text(texts, "自动选择") is not None
+
+
+def _is_team(task, texts):
+    """选队友页：整框「选择队友」+「队伍能力」。"""
+    if task.match_text(texts, "选择队友") is None:
+        return False
+    return task.match_text(texts, "队伍能力") is not None
+
+
+def _is_note_study(task, texts):
+    """笔记/球星卡「学习」页：「契合度」+「评分」。
+
+    「契合度」是这一页独有的标签（选卡详情弹窗也会弹它，但那一页
+    有「选择笔记/选择器材」，被 `handle_note_select`/`handle_equipment` 认领）。
+    """
+    if task.match_text(texts, "契合度") is None:
+        return False
+    return task.match_text(texts, "评分") is not None
+
+
+def _is_theme_select(task, texts):
+    """题材选择页：标题「请选择一个题材」。"""
+    return task.match_text(texts, "请选择一个题材") is not None
+
+
+def _is_ingredient_select(task, texts):
+    """食材选择页：标题「请选择要使用的食材」。"""
+    return task.match_text(texts, "请选择要使用的食材") is not None
+
+
+def _is_spin_wheel(task, texts):
+    """转盘页（钓鱼/做饭）：标题「开始做饭 / 钓鱼啦」+「转一转」。"""
+    if task.match_text(texts, labels.WHEEL_TITLES) is None:
+        return False
+    return task.match_text(texts, "转一") is not None
+
+
+def _is_izumi_question(task, texts):
+    """和泉的问题（对话二选一）：「继续倾听和泉的问题」。"""
+    return task.match_text(texts, "继续倾听和泉的问题") is not None
+
+
+def _is_stock_pick(task, texts):
+    """选股页（天赋「股神!」）：标题「请选择你要投资的股票」。"""
+    return task.match_text(texts, labels.STOCK_PICK_TITLE) is not None
+
+
+def _is_rest_confirm(task, texts):
+    """休息确认框：「休息需要消耗一天」等（`labels.REST_CONFIRM_TEXTS`）。"""
+    return task.match_text(texts, labels.REST_CONFIRM_TEXTS) is not None
+
+
+def _is_manuscript_submit(task, texts):
+    """WARD 文档汇报页：标题「WARD文档」+「收集到的idea」。
+
+    不能只认标题 —— 页面底部（y≈0.93）还印着一个装饰用的「WARD文档」，
+    只靠标题判会出现只有标题的中间态（`handlers/talent.py` 同源判据）。
+    """
+    if task.match_text(texts, "WARD文档") is None:
+        return False
+    return task.match_text(texts, "收集到的idea") is not None
+
+
+def _is_announcement(task, texts):
+    """整页公告：标题「公告」。
+
+    2026-11-10 实机：游戏刚启动时这页盖住全部界面。
+    """
+    return task.match_text(texts, "公告") is not None
+
+
+def _is_vacation(task, texts):
+    """度假 / 海边合宿页：「海边合宿 / 度假 / 合宿」。
+
+    2026-11-14 路由修正：分类器把这页认成 `story_arrow`（剧情页），
+    路由后 `handle_story_arrow` 会抢先，点右下角 ▼ 推进剧情 ——
+    但这一页要点的是主按钮（`handle_vacation` 的行为）。
+    「合宿」是这一页独有的词，别处不出现。
+    """
+    if task.match_text(texts, "训练计划") is not None:
+        return False
+    return task.match_text(texts, labels.VACATION_TEXTS) is not None
+
+
+def _is_captain_filter(task, texts):
+    """选队长的「显示设定 → 筛选」面板：「显示设定」+ 排序维度。
+
+    2026-11-14 实跑：这一页在 20:17:12 掉进 unknown（`handle_captain_filter`
+    自己认得出来，但分类器没登记）。
+    「显示设定」是这一页独有的标题。
+    """
+    if task.match_text(texts, "显示设定") is None:
+        return False
+    return task.match_text(texts, ("稀有度", "位置", "排序", "筛选")) is not None
+
+
+def _is_training_hub(task, texts):
+    """训练日主界面：右下角主按钮区写着「训练 / 比赛 / VS」。
+
+    2026-11-14 实跑：这一页 16 帧掉进 unknown。
+    只看 `main_action` 区域（右下角）—— 全屏的台词里也会出现「比赛」「训练」，
+    用它判会把剧情页抢走。
+    """
+    action = task.texts_in_region(texts, "main_action")
+    return task.match_text(action, ("VS", "比赛", "训练")) is not None
+
+
+def _is_breath_difficulty(task, texts):
+    """憋气难度页：标题「选择憋气难度」。
+
+    2026-11-14 实跑：这一页被认成 `event_choice`（三张卡的形态一样），
+    路由先试 event_choice 失败后才落到 `handle_breath_difficulty` ——
+    行为对，但分类日志不准，且万一 event_choice 命中就会抢走。
+    标题是这一页独有的。
+    """
+    return task.match_text(texts, "选择憋气难度") is not None
+
+
+def _is_stamina_short(task, texts):
+    """专注不足弹框：「训练所需专注还差 N，是否进行回复呢？」。
+
+    2026-11-14 实跑（logs/1114-231948_第2局_野上泷）：点「开始训练」时
+    专注差 20，弹出这个框。但分类器看到底下的「选择器材 / 自动选择」，
+    把这一帧认成 `equipment` —— 路由把 `handle_equipment` 提到最前，
+    抢走了本该由 `handle_stamina_short`（顺序表位置 5）处理的弹框，
+    于是「点自动选择 → 点开始训练 → 弹框 → 再点自动选择」死循环，
+    一天点了 101 下后被看门狗停任务。
+
+    弹框是**叠加在任何页面上的**，所以它的优先级要比所有页面都高。
+    """
+    return task.match_text(texts, ("专注还差", "是否进行回复")) is not None
+
+
+def _is_popup(task, texts):
+    """弹层：「点击屏幕继续」等纯文本弹窗。
+
+    和 `result_page`（活动结算，有奖励明细）分开 —— 这一页没有明细，
+    只是一句提示 + 「点击屏幕继续」。
+    """
+    return task.match_text(texts, labels.TAP_TO_CONTINUE) is not None
+
+
+def _is_park_detail(task, texts):
+    """公园详情页（选了某个项目后）：「前往划船 / 前往野餐」。
+
+    和 `park`（公园首页）分开 —— 详情页上才有「前往XX」。
+    """
+    return task.match_text(texts, ("前往划船", "前往野餐", "前往散步")) is not None
+
 
 def _is_game_title(task, texts):
     if task.exact_text(texts, (labels.GAME_TITLE_ENTER,)) is None:
@@ -129,6 +378,12 @@ def _is_match_result(task, texts):
       - 目标达成：「目标达成」+「获得奖励」
       - 胜利结算：「战胜XX学校」+「获得奖励」
 
+    「获得奖励」单独出现**不够** —— 专注恢复页弹出的奖励提示框
+    （`获得奖励 | 点击任意区域关闭`）也有这个词，
+    会被误判成比赛结算页、进而抢走「专注恢复」的关闭按钮
+    （2026-11-14 路由实测发现）。所以要求**同时**有比赛结算的另一样标志：
+    比分（「胜利」/「战胜XX学校」）或统计表头。
+
     「失败」不能用：训练科目页的「失败率 27%」含「失败」
     （docs/shots/2026-10-26-subject-crit.png 就是这样被抢走的）。
     """
@@ -137,7 +392,15 @@ def _is_match_result(task, texts):
     if task.match_text(texts, ("胜利", "失败", "结算", "目标达成")) is not None:
         return True
     if task.match_text(texts, "获得奖励") is not None:
-        return True
+        # 奖励弹窗要在**同时**有比分或统计表头才算比赛结算：
+        # - 专注恢复页的奖励提示框（`获得奖励 | 点击任意区域关闭`）
+        # - 注册球员编队页的奖励弹层（`获得奖励：钻石500 | 关闭`）
+        # 这两处都只有「获得奖励」，没有比分 → 不能算比赛结算页。
+        if task.match_text(texts, "战胜") is not None:
+            return True
+        stats = [w for w in ("得分", "篮板", "助攻", "盖帽", "抢断")
+                 if task.match_text(texts, w) is not None]
+        return len(stats) >= 2
     stats = [w for w in ("得分", "篮板", "助攻", "盖帽", "抢断")
              if task.match_text(texts, w) is not None]
     return len(stats) >= 2
@@ -297,13 +560,17 @@ def _is_boost_status(task, texts):
     被 `handle_event_choice` 兜底认领。它和事件选项页长得像（都在底部属性
     面板上方），但**没有可点选项**。
 
-    只认**标签**词，不能用泛词「加成」—— 正文里到处是「加成」
-    （「器材加成-70熟练度」「训练加成状态」「暴击训练的加成」都是效果描述，
-    见 `logs/.../1112-002441_handle_event_choice.jpg`）。
+    只认**这几个固定标签**，不能用「xx加成」泛匹配 ——
+    选队长页会显示流派名「扭蛋加成 / 训练加成」，也会被泛匹配命中
+    （2026-11-14 实跑 20:17:11 实测：那一帧是选队长页，被认成加成状态页）。
+    也不能用泛词「加成」—— 正文里到处是「器材加成-70熟练度」
+    「暴击训练的加成」这类效果描述。
     """
     for t in texts:
         s = t.name.strip()
-        if len(s) <= 6 and (s.endswith("加成") or s in ("额外队友", "Bonus", "Bonus:")):
+        if s in ("表情加成", "倍率加成", "额外队友", "Bonus", "Bonus:"):
+            return True
+        if s.startswith("属性加") and len(s) <= 5:
             return True
     return False
 
@@ -336,6 +603,14 @@ def _is_event_choice(task, texts):
     if task.match_text(texts, labels.STOCK_PICK_TITLE) is not None:
         return False
     if len(_short_place_names(texts)) >= 2:
+        return False
+    # 编队 / 战术板页（2026-11-14 路由实测发现）：
+    # 这一页的「自动编队 / 保存成功 / 评分奖励」是竖排的**面板标签**，
+    # 形态和竖排事件选项一样（`choice_candidates` 会把它们当候选），
+    # 于是这一页被认成事件页，路由后点了「AN」这种 OCR 碎片。
+    # 用**页面级强特征**排除：这几个词只出现在编队页。
+    if task.match_text(texts, ("自动编队", "保存调整", "奖励总览",
+                               "战术板", "下级奖励")) is not None:
         return False
     # 地点内页的底部按钮（野餐/划船、桌游GM/当服务员）也是居中一列短词，
     # 形态和竖排事件选项一样 —— 用**页面标题**区分（2026-11-14 实测）。
@@ -492,6 +767,31 @@ _ANCHORS = {
     "skill_select": _is_skill_select,
     "result_page": _is_result_page,
     "training_plan": _is_training_plan,
+    # --- 2026-11-14 补登记（依据 docs/shots 50 张人工确认过的回归图）---
+    "captain": _is_captain,
+    "training_entry": _is_training_entry,
+    "lobby": _is_lobby,
+    "arcade": _is_arcade,
+    "stage_list": _is_stage_list,
+    "confirm_team": _is_confirm_team,
+    "equipment": _is_equipment,
+    "team": _is_team,
+    "note_study": _is_note_study,
+    "theme_select": _is_theme_select,
+    "ingredient_select": _is_ingredient_select,
+    "spin_wheel": _is_spin_wheel,
+    "izumi_question": _is_izumi_question,
+    "stock_pick": _is_stock_pick,
+    "rest_confirm": _is_rest_confirm,
+    "manuscript_submit": _is_manuscript_submit,
+    "announcement": _is_announcement,
+    "popup": _is_popup,
+    "park_detail": _is_park_detail,
+    "vacation": _is_vacation,
+    "captain_filter": _is_captain_filter,
+    "training_hub": _is_training_hub,
+    "breath_difficulty": _is_breath_difficulty,
+    "stamina_short": _is_stamina_short,
 }
 
 

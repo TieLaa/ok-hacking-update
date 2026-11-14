@@ -755,7 +755,7 @@ class WeekendHandlers:
         （见 constants.WEEKEND_PLAN / WEEKEND_MAIN_PLACE 和
         `places/map.py: training_weekend_places`）：
         - **训练流**：按精力缺口选动作 ——
-          缺口 ≥ 周末划船缺口（30）→ 公园（缺口 ≥ 周末野餐阈值 70 野餐，
+          缺口 ≥ 周末划船缺口（30）→ 公园（缺口 ≥ 周末野餐缺口 70 野餐，
           否则划船）；缺口 < 30 → 餐厅打工（零用钱留给商店的牛奶/秘籍，
           不去步行街/游戏厅）；缺口读不到 → 回退「餐厅 → 公园」；
         - **商店流**：周六/周日去餐厅打工；

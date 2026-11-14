@@ -835,9 +835,18 @@ class TrainingHandlers:
             if cards:
                 minutes, card = max(cards, key=lambda c: c[0])
                 x, y = self._breath_card_point(card, texts)
-                self.click(x, y, after_sleep=0.5)
-                self._breath_picked = True
+                # 2026-11-14 实跑（logs/1114-230254_野上泷/debug/
+                # 1114-230512_noresp3s）：这一下点击被「让路」闸门吞掉了
+                # （clicks.jsonl 里没有记录），但 `_breath_picked` 照样设成 True
+                # → 之后每拍只点「确定」，卡片永远是灰的，连点到看门狗接管。
+                # 所以**只认真的发出去的点击**：`_last_click_at` 只在点击完成时更新。
+                before = getattr(self, "_last_click_at", 0.0)
                 self.log_info(f"憋气难度页：选 {minutes} 分钟那档（时长最长）@({x},{y})")
+                self.click(x, y, after_sleep=0.5)
+                picked = getattr(self, "_last_click_at", 0.0) != before
+                if not picked:
+                    self.log_warning("憋气难度页：选卡那次点击被让路跳过 → 下一拍重试")
+                self._breath_picked = picked
                 return True
             self.log_warning(f"憋气难度页：认不出「N分钟」卡片 → 直接点确定"
                              f"（读到 {[t.name.strip() for t in texts][:6]}…）")
@@ -850,14 +859,21 @@ class TrainingHandlers:
         return True
 
     def _breath_card_point(self, card, texts):
-        """卡片的点击点：**卡身中部**，不是那个「N分钟」标签。
+        """卡片的点击点：**标签下沿和说明文字上沿之间的空白区**。
 
         2026-11-04 实机（同一页两次踩）：
           - 点「4分钟」文字框中心 (307, 408) → **选不中**，「确定」一直是灰的，
             点了 1000+ 次也不动；
           - 点卡身 (400, 450) → 立刻选中（「确定」由灰转黄）。
-        所以取「同一列、位于标签下方」的那行说明文字（奖励说明）中心当点击点，
-        它一定在卡身里；认不出来才退回「标签正下方 9% 屏高」。
+
+        2026-11-14 实跑又栽一次（`logs/1114-201708_野上泷/debug/1114-202055_noresp3s`）：
+        当时的写法取**说明文字中心** (406, 490)，落在「更高概率获得大量零用钱」
+        这行字上 —— 游戏把点击吃掉了（「确定」一直是灰的，连点 4 次没反应）。
+        说明文字在卡里，但**点文字不等于点卡**。
+
+        所以取「标签下沿」和「说明文字上沿」的**中点**：
+        那一带是纯卡身空白，不会有文字层拦截。
+        上面那次的坐标正好回到实测有效的 450。
         """
         cx = (card.x + card.width / 2) / self.width
         cy = (card.y + card.height / 2) / self.height
@@ -866,7 +882,9 @@ class TrainingHandlers:
         if below:
             t = min(below, key=lambda b: abs((b.x + b.width / 2) / self.width - cx))
             if abs((t.x + t.width / 2) / self.width - cx) <= 0.09:
-                return int(t.x + t.width / 2), int(t.y + t.height / 2)
+                # 标签下沿 → 说明文字上沿，取中点（纯空白区）
+                gap_y = (card.y + card.height + t.y) / 2
+                return int(t.x + t.width / 2), int(gap_y)
         return int(self.width * cx), int(self.height * (cy + 0.09))
 
 

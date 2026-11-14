@@ -11,7 +11,7 @@
 
 - 一局 = 一次养成，终点是「注册球员 → 回大厅」（`END_OF_ROUND.md`）；
 - 每局结束时在「恭喜获得 / 训练奖励」页读一次**这个球员的评分**
-  （`parsers.read_squad_ratings` + `constants.POSITION_BY_NAME` 队长→位置）；
+  （`parsers.read_squad_ratings` + `roster.position_by_name` 队长→位置）；
 - 达标 → 游标 +1，换队列里的下一个队长开新局；
 - 没达标 → **同一个队长**再开一局（这就是「反复训练」）。
 
@@ -29,7 +29,8 @@ import os
 import re
 import time
 
-from src.tasks.training.constants import POSITION_BY_NAME, PROJECT_ROOT
+from src.tasks.training import roster
+from src.tasks.training.constants import PROJECT_ROOT
 from src.tasks.ui import labels
 
 # 进度文件：**跨进程/重启续跑**才用（2026-11-07 起：队列默认一次性内存对象，
@@ -71,7 +72,7 @@ def position_of(name):
 
     名字比较一律过 `labels.name_matches`（间隔点被 OCR 吃掉、带 `SR-` 前缀都算同一个）。
     """
-    for known, pos in POSITION_BY_NAME.items():
+    for known, pos in roster.position_by_name().items():
         if labels.name_matches(known, name):
             return pos
     return None

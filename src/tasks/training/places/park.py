@@ -18,7 +18,7 @@
 选哪个（用户 2026-10-30 / 2026-11-01 / 2026-11-08 / 2026-11-11）：
 
 - **训练流（2026-11-11 起）**：按**精力缺口**选，队友不参与 ——
-  缺口（上限−当前）≥ `周末野餐阈值`（默认 70）→ 野餐；
+  缺口（上限−当前）≥ `周末野餐缺口`（默认 70）→ 野餐；
   缺口 < 70 → 划船（属性+）。划船比野餐少回的精力拿去训练，
   收益高于划船那点属性，所以缺口大时野餐优先，不被「划船队友多 2」改走。
   缺口读不到时才回退旧行为（周六划船 / 周日看精力）。
@@ -95,8 +95,8 @@ class ParkPlace:
         2026-11-11 用户口径：**训练流按缺口选**，队友改判不再抢野餐 ——
         划船比野餐少回的精力拿去训练，收益高于划船那点属性：
 
-            缺口（上限−当前）≥ 周末野餐阈值（默认 70） → 野餐
-            缺口 < 周末野餐阈值                          → 划船
+            缺口（上限−当前）≥ 周末野餐缺口（默认 70） → 野餐
+            缺口 < 周末野餐缺口                          → 划船
 
         其它流派保持 2026-11-08 的「划船队友多 2 个 → 划船」。
 
@@ -123,7 +123,7 @@ class ParkPlace:
         if style == "训练流":
             gap = self.weekend_gap(texts)
             if gap is not None:
-                threshold = int(self.config.get("周末野餐阈值"))
+                threshold = int(self.config.get("周末野餐缺口"))
                 if gap >= threshold:
                     self.log_info(f"公园：缺口 {gap} ≥ {threshold} → 野餐补精力")
                     return "野餐"
@@ -158,7 +158,7 @@ class ParkPlace:
         if st.get("park_choice") is None:
             if day == "日":
                 stamina = self.top_bar(texts).get("stamina")
-                # 只在「缺口」读不到时兜底；周末野餐阈值现在表示缺口，
+                # 只在「缺口」读不到时兜底；周末野餐缺口现在表示缺口，
                 # 不能拿它当精力阈值用，所以这里用旧的固定 60。
                 threshold = WEEKEND_PICNIC_FALLBACK
                 if stamina is not None and stamina < threshold:

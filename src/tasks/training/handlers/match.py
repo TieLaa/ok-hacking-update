@@ -158,7 +158,11 @@ class MatchHandlers:
             self.log_info("活动赛：继续匹配")
             self._match_intro_at = 0.0          # 上一局的开场窗口作废
             return True
-        if page_signatures.page_is_other(self, texts, "match_result"):
+        # 排除「关卡列表页」（关卡加成 + 奖励预览）。
+        # 2026-11-14 改名：签名表里这一条原来叫 `match_result`，
+        # 和 `pages.py` 的 `match_result`（比赛结算页）同名不同义 ——
+        # 同名两套答案，实测有 331 帧判定不一致。现在叫 `stage_list`。
+        if page_signatures.page_is_other(self, texts, "stage_list"):
             return False
         # 锦标赛对阵图：只有「赛程已完成 / 距离下场比赛 / 下一场」和学校名，
         # 没有「结算/赛程」这种整词标题，旧判据认不出来会被事件 handler 当成竖排选项。

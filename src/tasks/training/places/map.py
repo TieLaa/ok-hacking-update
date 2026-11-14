@@ -22,8 +22,9 @@ from collections import namedtuple
 
 from src.tasks.training import params
 from src.tasks.training.constants import (
-    PARK_PICNIC_STAMINA, SHOP_SEASON_WEEKS, WEEKEND_MAIN_PLACE,
-    WEEKEND_PARK_GAP, WEEKEND_PLAN, WEEKEND_WORK_MONEY_GATE, WORK_STAMINA_COST)
+    PARK_PICNIC_STAMINA, SHOP_SEASON_WEEKS,
+    WEEKEND_MAIN_PLACE, WEEKEND_PARK_GAP, WEEKEND_PLAN,
+    WORK_STAMINA_COST)
 from src.tasks.ui import labels
 
 # 周末计划的一步：place=地点名，urgent=True=急招临时插队（不是今天的主计划）。
@@ -70,7 +71,7 @@ class MapPlace:
         缺口 = 精力上限 − 当前精力。**不再看固定星期几**：
 
             缺口 ≥ 周末划船缺口（默认 30） → 公园
-                公园内再按「周末野餐阈值」（默认 70）分野餐/划船；
+                公园内再按「周末野餐缺口」（默认 70）分野餐/划船；
             缺口 < 周末划船缺口（30） → 餐厅打工
 
         打工后面跟「公园」兜底：这一站打不了工时，公园划船还能拿属性，
@@ -149,7 +150,7 @@ class MapPlace:
         #   缺口（上限−当前）> WEEKEND_PARK_GAP → 公园
         #   缺口 ≤ WEEKEND_PARK_GAP → 餐厅打工
         # 阈值 60 取自「两次划船合计 +60」。周日不一定划船：精力 < 周末野餐
-        # 阈值时是野餐（+70），那两天实际回 100 —— 60 是分界，不是回收量的保证。
+        # 缺口时是野餐（+70），那两天实际回 100 —— 60 是分界，不是回收量的保证。
         # 训练流精力优先，零花钱不参与这个判断；读不到体力就不赌，仍去公园。
         if had_venues and not any(p in ("步行街", "游戏厅") for p in places):
             if "公园" in places and self.park_gap_small():
@@ -188,13 +189,18 @@ class MapPlace:
         两条决策链，**互斥**：
 
         **扭蛋流 / 小游戏流**（2026-11-10 用户口径，**取代** 2026-11-08 的 0~7 表）：
-        只看零用钱，和队友、标签、星期都无关 ——
+        先看零用钱，队友和星期都无关 ——
           - 读不到 → 主地点（不拿打工赌今天的消费）；
-          - < `WEEKEND_WORK_MONEY_GATE`（360）→ **只去餐厅打工**；
+          - < `weekend.work_money_gate`（360）→ **只去餐厅打工**；
+            例外（2026-11-14 用户口径）：**扭蛋流**遇到步行街名字左侧
+            「打折！」且零用钱 ≥ `weekend.discount_money_gate`（180）→
+            改去步行街。折后门槛 = 360 的一半，错过打折是实打实的损失。
+            游戏厅/餐厅的「打折」标签不适用；小游戏流本次不改。
           - ≥ 360 → 主地点。
         理由（一次步行街期望 3.3 颗、4 颗金 = 360 覆盖 78% 的触发轮次）见
-        `constants.WEEKEND_WORK_MONEY_GATE` 的注释。2026-11-13 试过 200，
+        `strategy/params.json` 的 `weekend._doc`。2026-11-13 试过 200，
         但折扣不是每次发生，没折扣时只够买 2 颗，已回滚 360。
+        现在的 180 只在**地图确认今天打折**时生效，不是无条件降门槛。
 
         **训练流**（2026-11-11 起）**不再经过这里**：缺口 < 30 固定去餐厅打工，
         候选里已经没有步行街/游戏厅。下面这条「只有一边打折就先去那边」
@@ -219,6 +225,8 @@ class MapPlace:
                 return places
             money = self.read_money(texts)
             week, _ = self.current_day()
+            gate = int(params.get("weekend.work_money_gate"))
+            discount_gate = int(params.get("weekend.discount_money_gate"))
             # 2026-11-14 用户口径（游戏设置）：第 7 周周六是最后一次出行，
             # **不看零花钱**直接去主地点；没消费再退出回餐厅打工（下一站）。
             if day == "六" and week == SHOP_SEASON_WEEKS:
@@ -228,14 +236,26 @@ class MapPlace:
                 return [main] + [p for p in places if p != main]
             if money is None:
                 self.log_info(f"周末地点：零用钱读不到 → 去「{main}」")
-            elif money < WEEKEND_WORK_MONEY_GATE:
+            elif money < gate:
+                # 2026-11-14 用户口径：钱不够 360 时，如果**步行街自己**在打折，
+                # 折后能买完，错过就是实打实的损失 → 改去步行街。
+                # 只认扭蛋流 + 步行街名字左侧的「打折」；游戏厅/餐厅的标签不改道。
+                if (self.style == "扭蛋流"
+                        and money >= discount_gate
+                        and self.venue_on_discount(
+                            texts, self._venue_box(texts, "步行街"))):
+                    self.log_info(
+                        f"周末地点：零用钱 {money} < {gate}"
+                        f"，但步行街打折（折后门槛 {discount_gate}）"
+                        f" → 去「步行街」消费")
+                    return [main] + [p for p in places if p != main]
                 self.log_info(
-                    f"周末地点：零用钱 {money} < {WEEKEND_WORK_MONEY_GATE}"
+                    f"周末地点：零用钱 {money} < {gate}"
                     " → 只去「餐厅」打工")
                 return ["餐厅"]
             else:
                 self.log_info(
-                    f"周末地点：零用钱 {money} ≥ {WEEKEND_WORK_MONEY_GATE}"
+                    f"周末地点：零用钱 {money} ≥ {gate}"
                     f" → 去「{main}」")
             return [main] + [p for p in places if p != main]
 

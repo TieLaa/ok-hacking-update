@@ -14,7 +14,8 @@ from ok.feature.Box import Box
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
 from src.tasks.ui import zoom_reread
-from src.tasks.training.constants import (STYLE_ALIASES, STYLE_BY_NAME)
+from src.tasks.training import roster
+from src.tasks.training.constants import STYLE_ALIASES
 
 # 科目按钮外圈「框」的判定门限（比例 = 环带上命中像素 / 环带总像素）。
 # 2026-10-27 第六局实跑 + 用户当场复核：
@@ -531,7 +532,7 @@ class TrainingParsersMixin:
         用户 2026-11-04 口径：多角色队列的达标判据就是**这一页的球员评分**。
         这一页只列五个位置（控卫/分卫/小前/大前/中锋）+ 评级 + 四位数评分，
         **没有名字**，所以按「位置词与评分数字的横向最近」配对，
-        再由调用方用 `constants.POSITION_BY_NAME` 把队长换成位置。
+        再由调用方用 `roster.position_by_name()` 把队长换成位置。
 
         实测帧 `docs/shots/2026-10-27-register-1.png`（1307x735）：
         `4822 (0.219) / 3028 (0.336) / 3025 (0.450) / 2915 (0.565) / 2917 (0.679)`，
@@ -550,10 +551,17 @@ class TrainingParsersMixin:
         scores, positions, ratings = [], [], []
         for t in band:
             s = t.name.strip()
-            if s.isdigit() and labels.SQUAD_SCORE_MIN <= int(s) <= labels.SQUAD_SCORE_MAX:
-                scores.append((cx_of(t), int(s)))
-            elif s in labels.SQUAD_POSITIONS:
+            if s in labels.SQUAD_POSITIONS:
+                # 位置词先判（精确匹配），避免「中锋5937」这种黏连框被当成评分
                 positions.append((cx_of(t), s))
+                continue
+            m = labels.SQUAD_SCORE_RE.search(s)
+            if m and labels.SQUAD_SCORE_MIN <= int(m.group(1)) <= labels.SQUAD_SCORE_MAX:
+                # 2026-11-14 实跑：OCR 会把评分和相邻文字黏在一起
+                # （`7929箱`、`中锋5937`），旧写法要求整框 `isdigit()`，
+                # 这两列直接丢了 → 只读到 3/5 个位置，队长评分读到 None、
+                # 达标判断永远「未达标」（logs/1114-230254_野上泷 第 1 局）。
+                scores.append((cx_of(t), int(m.group(1))))
             elif labels.SQUAD_RATING_RE.match(s):
                 ratings.append((cx_of(t), s))
         if not scores or not positions:
@@ -1606,8 +1614,7 @@ class TrainingParsersMixin:
     def style_for_name(name):
         """角色名（可能只有姓氏）→ 流派；查不到返回 None。
 
-        查表用 STYLE_BY_NAME（SSR 来自 docs/roster/ssr_roster.md，SR 来自
-        docs/roster/sr_roster.json）。
+        查表用 `roster.style_by_name()`（`docs/roster/*.json` 的 `style_tag`）。
         日历标题只显示姓氏，所以按前缀匹配；多个前缀都命中（「羽」→ 羽田 / 羽濑川）
         时取**更长的那个**，长度一样才算歧义（返回 None，宁可不动）。
 
@@ -1621,14 +1628,15 @@ class TrainingParsersMixin:
             return None
         s = labels.norm_name(name).replace(" ", "").strip()
         # 错字先归到规范名（2026-11-03：羽漱川湊 → 羽濑川湊）。
-        # 别名只做查询兼容，不进 STYLE_BY_NAME —— 那张表是监控页下拉的数据源。
+        # 别名只做查询兼容，不进角色表 —— 那张表同时是监控页下拉的数据源。
         for wrong, right in STYLE_ALIASES.items():
             if s == labels.norm_name(wrong):
                 s = labels.norm_name(right)
                 break
-        variants = list(STYLE_BY_NAME.items())
+        style_map = roster.style_by_name()
+        variants = list(style_map.items())
         for wrong, right in STYLE_ALIASES.items():
-            style = STYLE_BY_NAME.get(right)
+            style = style_map.get(right)
             if style is not None:
                 variants.append((wrong, style))
         best, best_len, tie = None, 0, False

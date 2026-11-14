@@ -4,8 +4,8 @@
 
 **为什么要有这一层**（2026-11-01 实测的三个问题）：
 
-    ① **默认值写在两处**。`default_config` 声明了 40，而调用处又写了一遍
-       `self.config.get("休息精力阈值", 40)` —— 那个 40 **永远不生效**
+    ① **默认值写在两处**。`default_config` 声明了 1300，而调用处又写了一遍
+       `self.config.get("属性减半门槛", 1300)` —— 那个 1300 **永远不生效**
        （config 一定命中 default_config）。但它让人以为「默认值在这里」，
        改它没用。实测 21 处调用点里 20 处是这种死代码。
 
@@ -59,12 +59,14 @@ class Spec:
 TRAINING = [
     Spec("失败率上限(%)", 50, INT, "训练科目页失败率高于这个值就直接回主界面休息（失败率高说明专注撑不住了）"),
     Spec("失败率超限改休息", True, BOOL, "失败率超限时是休息还是硬练"),
-    Spec("休息精力阈值", 50, INT, "精力低于这个值就休息一天（训练流按 50 保证 0% 失败率；扭蛋流 / 小游戏流的周四另有 60 的硬阈值）"),
     Spec("属性减半门槛", 1300, INT,
          "属性当前值达到这个数后，训练/属性商品的收益减半（用户体感：超过 1300 开始打折）"),
     Spec("缺口排除阈值", 100, INT,
          "属性离上限不足这个值时，不再训练该科目、也不再买它的属性商品（继续加大概率溢出）"),
     Spec("允许开始训练", True, BOOL, "关掉后只逛不练"),
+    Spec("页面分类路由", True, BOOL,
+         "按识别出的页面直接派给对应的处理逻辑（更快也更准）。"
+         "关掉后恢复成「按顺序逐个试」的老做法 —— 页面识别出错时用这个兜底"),
     Spec("无队长不接开局", True, BOOL, "指定队长留空时生效：只跑你手动开好的局，遇到大厅/启程/选人/笔记/器材/确认编队这些开局页面就停下，不替你开局。勾上队长后自动恢复"),
     Spec("指定队长", "", STR,
          "填角色名（如「真崎辉世」「佐久间」）→ 按这个角色的流派跑，开局就定好、不点日历；"
@@ -75,7 +77,7 @@ TRAINING = [
 WEEKEND = [
     Spec("公园选项", "野餐", DROP, "野餐 = 精力++；划船 = 属性+；散步 = 零用钱+",
          options=["野餐", "划船", "散步"]),
-    Spec("周末野餐阈值", 70, INT,
+    Spec("周末野餐缺口", 70, INT,
          "训练流周末：缺口（精力上限−当前精力）≥ 这个值去野餐；< 这个值去划船。"
          "野餐基础回 70，所以默认 70；其他流派不读这个键"),
     Spec("周末划船缺口", 30, INT,
@@ -245,7 +247,8 @@ def build_description():
 # `default_config` 里有的键，旧键连同值会被直接扔掉，所以必须在 Config
 # 构造**之前**把它搬过去。一个键有多个旧名时按顺序取第一个存在的值。
 LEGACY_KEYS = {
-    "休息精力阈值": ("休息专注阈值", "休息体力阈值"),
+    # 2026-11-14：「休息精力阈值」升为策略参数（`strategy/params.json` 的
+    # `rest.stamina_threshold`），不再是配置项，旧键由 verify_config 丢弃。
     "扭蛋清空精力阈值": ("扭蛋清空体力阈值",),
     # 2026-11-08：商店/扭蛋/小游戏分开配置，旧的通用「购买策略」只服务过商店。
     "商店购买策略": ("购买策略",),
@@ -261,11 +264,19 @@ LEGACY_VALUES = {
     },
 }
 
+# 旧键只删除、不搬值：语义单位变了，旧值没有对应值。
+# 2026-11-11 起「周末野餐阈值」表示「缺口 ≥ N」（旧口径是「周日精力 < N」），
+# 旧值 60 是绝对精力，直接搬过去会被当成「缺口 ≥ 60」。
+LEGACY_DROP = {
+    "周末野餐阈值": "周末野餐缺口",
+}
+
 
 def migrate_saved_config(name, folder="configs"):
     """把 `configs/<name>.json` 里的旧键名改成新键名。
 
-    返回改过没有。读不到文件（第一次跑）/ JSON 坏了都当「不用迁移」。
+    返回变更说明（列表）：空列表 = 没改。读不到文件（第一次跑）/
+    JSON 坏了都当「不用迁移」。
     """
     import json
     import os
@@ -275,27 +286,34 @@ def migrate_saved_config(name, folder="configs"):
         with open(path, encoding="utf-8") as f:
             saved = json.load(f)
     except (OSError, ValueError):
-        return False
+        return []
     if not isinstance(saved, dict):
-        return False
-    changed = False
+        return []
+    changed = []
     for new_key, old_keys in LEGACY_KEYS.items():
         # 新键已经有值（用户改过）就保留新键，旧键只负责清掉
-        values = [saved.pop(k) for k in old_keys if k in saved]
+        old_present = [k for k in old_keys if k in saved]
+        values = [saved.pop(k) for k in old_present]
         if not values:
             continue
-        changed = True
+        changed.append(f"「{' / '.join(old_present)}」已改写为「{new_key}」，值保留")
         if new_key not in saved:
             saved[new_key] = values[0]
     for new_key, mapping in LEGACY_VALUES.items():
         if saved.get(new_key) in mapping:
-            saved[new_key] = mapping[saved[new_key]]
-            changed = True
+            old_value = saved[new_key]
+            saved[new_key] = mapping[old_value]
+            changed.append(f"「{new_key}」的旧选项「{old_value}」已改为「{saved[new_key]}」")
+    for old_key in LEGACY_DROP:
+        if old_key in saved:
+            old_value = saved.pop(old_key)
+            changed.append(
+                f"「{old_key}」的旧值 {old_value} 已丢弃（语义从精力改为缺口）")
     if not changed:
-        return False
+        return []
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(saved, f, ensure_ascii=False, indent=4)
     except OSError:
-        return False
-    return True
+        return []
+    return changed

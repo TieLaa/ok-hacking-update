@@ -6,32 +6,19 @@
 
 import re
 
+from src.tasks.training import params
 from src.tasks.training.attributes import REQUIRED_BONUS
 
 
 class TrainingScoringMixin:
 
-    # 科目预览打分（2026-10-29 定稿：彩框抬到 2.3）
-    # 队友 1 / 装备 1 / 经理 2.1 / 金框 1.2 / 彩框 2.3
-    #
-    # 为什么 金框 1.2 < 经理 2.1 < 彩框 2.3：
-    #   - 金框/彩框/经理是**同一个机制**：装备反复用 → 累积经验 → 满经验出现金边/彩边 → 暴击；
-    #     经理反复一起练 → 累积经验 → 触发「经理的帮助」。
-    #   - 彩框 > 经理（2026-10-29 用户口径「彩框要多加一档 2.3」）：彩框是真能吃到的暴击，
-    #     用户明确要求「有彩框就该练」；金框只是「快满了」的预告，维持 1.2 不动。
-    #   - 2026-10-27 实跑复核：暴击只比同周普通训练多 +23 左右（14 个样本）；
-    #     2.3 是用户拍板的主观档位，不是拟合出来的数字。
-    # 关键口径：**金框/彩框指训练科目按钮外面那一圈**，不是底部预览区的器材卡。
-    # 按卡上的金框算会和「装备」重复计分（框本来就是装备/经理经验满了才点亮），
-    # 所以装备只按张数算一次，框只看按钮外圈。
-    W_MATE = 1.0
-    W_EQUIP = 1.0
-    W_MANAGER = 2.1
-    W_GOLD = 1.2
-    # 2026-10-29 用户口径：彩框再抬一档 = 2.3（压过经理 2.1）。
-    # 实跑依据：16:45「意识」金框 1 得分 2.20，输给「防守」经理+2装备 4.10，
-    # 用户明确要求「有彩框就该练」；彩框是真暴击，金框只是预告，所以只抬彩框。
-    W_COLOR = 2.3
+    # 科目预览打分权重已进策略参数表（`strategy/params.json` 的 `scoring`）：
+    # 队友 / 装备 / 经理 / 金框 / 彩框。排序理由和实测依据见那里的 `_doc`。
+    # 关键口径：**金框/彩框指训练科目按钮外面那一圈**，不是底部预览区的器材卡
+    # （按卡上的金框算会和「装备」重复计分）。
+    @classmethod
+    def _weights(cls):
+        return params.get("scoring")
 
     @classmethod
     def empty_preview(cls):
@@ -48,11 +35,12 @@ class TrainingScoringMixin:
         """
         if not r:
             return 0.0
-        score = (r["mates"] * cls.W_MATE
-                 + r["equip"] * cls.W_EQUIP
-                 + r["manager"] * cls.W_MANAGER
-                 + r["gold"] * cls.W_GOLD
-                 + r["color"] * cls.W_COLOR)
+        w = cls._weights()
+        score = (r["mates"] * w["mate"]
+                 + r["equip"] * w["equip"]
+                 + r["manager"] * w["manager"]
+                 + r["gold"] * w["gold_ring"]
+                 + r["color"] * w["color_ring"])
         if required:
             score += REQUIRED_BONUS
         return score

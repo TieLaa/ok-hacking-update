@@ -27,8 +27,7 @@ import time
 
 from src.tasks.ui import Defs, labels
 from src.tasks.training.constants import (SHOP_ENTRY_TRIES,
-                                          SHOP_SEASON_WEEKS,
-                                          STYLE_BY_NAME)
+                                          SHOP_SEASON_WEEKS)
 
 
 class DayCycleMixin:
@@ -283,7 +282,7 @@ class DayCycleMixin:
         style = self.style_for_name(name)
         if not style:
             self.log_warning(
-                f"配置的队长「{name}」不在角色表（STYLE_BY_NAME）→ 认不出流派")
+                f"配置的队长「{name}」不在角色表（docs/roster）→ 认不出流派")
             return False
         self._style = style
         self._style_name = name
@@ -310,7 +309,7 @@ class DayCycleMixin:
         style = self.style_for_name(name)
         if not style:
             self.log_warning(
-                f"日历上的队长「{name}」不在角色表（STYLE_BY_NAME）→ 认不出流派")
+                f"日历上的队长「{name}」不在角色表（docs/roster）→ 认不出流派")
             return False
         self._style = style
         self._style_name = name

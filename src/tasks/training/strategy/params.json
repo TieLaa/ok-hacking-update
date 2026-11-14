@@ -1,7 +1,28 @@
 {
-  "_doc": "策略参数表：会随打法/版本调整、但不该给玩家改的标量。代码只读；玩家个人偏好仍走 configs/TrainingTask.json（config_spec 声明）。",
+  "_doc": "策略参数表：会随打法/版本调整、但不该给玩家改的标量或小表。代码只读；玩家个人偏好仍走 configs/TrainingTask.json（config_spec 声明）。",
   "_schema_version": 1,
   "vacation": {
     "stamina_target": 100
+  },
+  "rest": {
+    "_doc": "stamina_threshold：精力低于这个值就休息一天。thursday_threshold_by_style：周四只对表里的流派生效，取 max(两者)；没列出的流派周四无特殊阈值。",
+    "stamina_threshold": 50,
+    "thursday_threshold_by_style": {
+      "扭蛋流": 60,
+      "小游戏流": 60
+    }
+  },
+  "weekend": {
+    "_doc": "work_money_gate：一次步行街期望 3.3 颗 x 单颗期望价 ~= 109，4 颗金卡 360 覆盖 78% 的触发轮次（2026-11-13 试过 200，折扣不是每次发生，已回滚）。discount_money_gate = 折后一半，只对地图上贴「打折！」的步行街生效（仅扭蛋流）。",
+    "work_money_gate": 360,
+    "discount_money_gate": 180
+  },
+  "scoring": {
+    "_doc": "科目预览打分：队友/装备/经理/金框/彩框。金框 1.2 < 经理 2.1 < 彩框 2.3 是因为三者同源（经验满了才点亮）；彩框是真暴击、用户拍板「有彩框就该练」，金框只是预告。2.3 是主观档位，不是拟合值。",
+    "mate": 1.0,
+    "equip": 1.0,
+    "manager": 2.1,
+    "gold_ring": 1.2,
+    "color_ring": 2.3
   }
 }

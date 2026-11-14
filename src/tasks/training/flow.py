@@ -6,7 +6,7 @@
 
 import time
 
-from src.tasks.training.constants import THURSDAY_REST_THRESHOLD_BY_STYLE
+from src.tasks.training import params
 from src.tasks.training.queue import CaptainQueue
 from src.tasks.ui import labels
 from src.util.emergency_stop import STOP
@@ -617,7 +617,7 @@ class TrainingFlowMixin:
     def note_run_score(self, texts):
         """在「恭喜获得 / 训练奖励」页读**这一局要判定的球员评分**（每局只记第一次）。
 
-        队长 → 位置（`constants.POSITION_BY_NAME`）→ 那一列的四位数评分。
+        队长 → 位置（`roster.position_by_name`）→ 那一列的四位数评分。
         读不到就返回 None 且**不改** `_run_score`：`target_met(None)` 恒为 False，
         这一局按「未达标」处理，同一个队长再练一局（宁可多练，不许假达标）。
         """
@@ -1035,10 +1035,13 @@ class TrainingFlowMixin:
                 setattr(self, attr, default() if callable(default) else default)
 
     def _note_page(self, texts):
-        """旁路页面分类：只记录「这一帧是什么页面」，不改变这一拍的动作。
+        """旁路页面分类：记录「这一帧是什么页面」，并把 PageID 返回给调用方。
 
         2026-11-13 全局方案阶段 1：先把 PageID 和实际命中的 handler 对照，
         差异清零后再把 `_handle_any` 切成「先分类、再分派」。
+        2026-11-14 阶段 2：已经切了 —— 调用方用返回值做**路由**，
+        分类器只当加速器，路由失败照旧全量遍历。
+
         失败时只记 debug，绝不影响主流程。
         """
         from src.tasks.training.pages import classify_page      # 局部导入，避开导入环
@@ -1047,7 +1050,7 @@ class TrainingFlowMixin:
             page, candidates = classify_page(self, texts)
         except Exception as e:                                  # noqa: BLE001
             self.log_debug(f"页面分类异常：{type(e).__name__}: {e}")
-            return
+            return None
         prev = getattr(self, "_page_id", None)
         self._page_id = page
         if page != prev:
@@ -1056,49 +1059,75 @@ class TrainingFlowMixin:
         elif len(candidates) > 1 and candidates != getattr(self, "_page_conflict", ()):
             self.log_warning(f"页面分类冲突：{list(candidates)} → 暂取 {page}")
         self._page_conflict = candidates
+        return page
 
     def _handle_any(self, texts, frame=None):
-        self._note_page(texts)
+        page = self._note_page(texts)
         # 大厅子菜单（强化/招募/卡池…）：玩家自己点进去的，任务一律不动，
         # 也不要走「不认识的界面 → 点屏幕中央」兜底（2026-10-28 用户反馈：
         # 强化页被当成三选一点升级卡、招募页被 story_arrow 点了一下）。
         if self.is_lobby_subpage(texts):
             return True
-        for handler in self.HANDLERS:
-            try:
-                if handler(self, texts):
-                    self._last_state = handler.__name__
-                    self._ui_event(handler, texts)
-                    self.snap_event(handler.__name__, texts, frame)
-                    self._recent_actions.append(f"step{self._steps} {handler.__name__}")
-                    # 记录「点击之后应该看到的那一帧」的指纹，下一拍对比是否变化
-                    self._sig_after_click = self._signature(texts)
-                    self.log_debug(f"命中 {handler.__name__}（第 {self._steps} 步）")
-                    # 各 handler 的瞬时状态由它自己声明（handlers/__init__.py: LEAVE_RESETS），
-                    # 命中别的界面时自动清零。这里**不再用 handler 名字字符串判断** ——
-                    # 那种写法每加一个 handler 都要回来改本函数（2026-11-01 重构）。
-                    self._reset_handler_leave_states(handler.__name__)
-                    # ---- 同一个 handler 连续命中太多次 = 这一页怎么点都推不动 ----
-                    # 声明表在 handlers/__init__.py: STALL_LIMITS（谁需要谁声明）。
-                    # 「点 3 次没变化」那套看门狗靠**界面指纹不变**，而顶栏数字/星标
-                    # 每拍都在闪时指纹每拍都变 → 永远不触发（2026-11-04 实跑：
-                    # 「选择憋气难度」页把「确定」点了 1019 次、烧掉 1200 步）。
-                    if handler.__name__ == getattr(self, "_loop_handler", None):
-                        self._loop_count = getattr(self, "_loop_count", 0) + 1
-                    else:
-                        self._loop_handler, self._loop_count = handler.__name__, 1
-                    limit = _stall_limits().get(handler.__name__)
-                    if limit and self._loop_count >= limit:
-                        self.dump_debug(texts, f"loop{self._loop_count}", frame)
-                        self._abort_reason = (
-                            f"{handler.__name__} 连续 {self._loop_count} 拍命中同一页"
-                            "却推不动（已存证（本局 debug/））")
-                        self.log_error(self._abort_reason, notify=True)
+        # 阶段 2：先分类、再分派（2026-11-14）。
+        # 分类器认出页面 → 先试这个页面对应的 handler；**跑不到就照旧全量遍历**。
+        # 顺序遍历里沉淀了踩坑的教训（「共用『下一步/确定』的必须排在专属
+        # handler 之后」），所以分类器只当**加速器**，绝不排除任何 handler ——
+        # 最坏情况 = 现在的行为（多跑几个 handler 的判据而已）。
+        if page is not None and self.config.get("页面分类路由"):
+            for first in self._routed_handlers(page):
+                if self._try_handler(first, texts, frame):
                     return True
-            except Exception as e:
-                self.log_error(f"{handler.__name__} 异常: {type(e).__name__}: {e}")
-                return True  # 吞掉这一拍，避免同一异常反复刷屏
+        for handler in self.HANDLERS:
+            if self._try_handler(handler, texts, frame):
+                return True
         return False
+
+    def _routed_handlers(self, page):
+        """这个页面对应的 handler 列表（按顺序表里的先后；没有就空）。"""
+        from src.tasks.training import page_handlers   # 局部导入，避开导入环
+
+        names = page_handlers.handlers_for(page)
+        if not names:
+            return []
+        by_name = {h.__name__: h for h in self.HANDLERS}
+        return [by_name[n] for n in names if n in by_name]
+
+    def _try_handler(self, handler, texts, frame):
+        """跑一个 handler；命中了就把这一拍记成它的动作。"""
+        try:
+            if not handler(self, texts):
+                return False
+        except Exception as e:
+            self.log_error(f"{handler.__name__} 异常: {type(e).__name__}: {e}")
+            return True  # 吞掉这一拍，避免同一异常反复刷屏
+        self._last_state = handler.__name__
+        self._ui_event(handler, texts)
+        self.snap_event(handler.__name__, texts, frame)
+        self._recent_actions.append(f"step{self._steps} {handler.__name__}")
+        # 记录「点击之后应该看到的那一帧」的指纹，下一拍对比是否变化
+        self._sig_after_click = self._signature(texts)
+        self.log_debug(f"命中 {handler.__name__}（第 {self._steps} 步）")
+        # 各 handler 的瞬时状态由它自己声明（handlers/__init__.py: LEAVE_RESETS），
+        # 命中别的界面时自动清零。这里**不再用 handler 名字字符串判断** ——
+        # 那种写法每加一个 handler 都要回来改本函数（2026-11-01 重构）。
+        self._reset_handler_leave_states(handler.__name__)
+        # ---- 同一个 handler 连续命中太多次 = 这一页怎么点都推不动 ----
+        # 声明表在 handlers/__init__.py: STALL_LIMITS（谁需要谁声明）。
+        # 「点 3 次没变化」那套看门狗靠**界面指纹不变**，而顶栏数字/星标
+        # 每拍都在闪时指纹每拍都变 → 永远不触发（2026-10-04 实跑：
+        # 「选择憋气难度」页把「确定」点了 1019 次、烧掉 1200 步）。
+        if handler.__name__ == getattr(self, "_loop_handler", None):
+            self._loop_count = getattr(self, "_loop_count", 0) + 1
+        else:
+            self._loop_handler, self._loop_count = handler.__name__, 1
+        limit = _stall_limits().get(handler.__name__)
+        if limit and self._loop_count >= limit:
+            self.dump_debug(texts, f"loop{self._loop_count}", frame)
+            self._abort_reason = (
+                f"{handler.__name__} 连续 {self._loop_count} 拍命中同一页"
+                "却推不动（已存证（本局 debug/））")
+            self.log_error(self._abort_reason, notify=True)
+        return True
 
     @property
     def no_captain_mode(self):
@@ -1227,7 +1256,7 @@ class TrainingFlowMixin:
         style = self.style_for_name(name)
         if not style:
             self.log_warning(
-                f"配置的队长「{name}」不在角色表（STYLE_BY_NAME）→ 仍按日历识别流派")
+                f"配置的队长「{name}」不在角色表（docs/roster）→ 仍按日历识别流派")
             return False
         self._style = style
         self._style_name = name
@@ -1247,14 +1276,15 @@ class TrainingFlowMixin:
         """今天「精力低于多少就休息」。
 
         用户 2026-11-04：**扭蛋流 / 小游戏流**在周四有硬阈值 **60**
-        （`THURSDAY_REST_THRESHOLD_BY_STYLE`，取代旧的「周二 65」）；**其它流派
-        （训练流 / 商店流）周四没有特殊限制**，只遵守配置里的「休息精力阈值」。
+        （`rest.thursday_threshold_by_style`，取代旧的「周二 65」）；**其它流派
+        （训练流 / 商店流）周四没有特殊限制**，只遵守策略参数
+        `rest.stamina_threshold`（`strategy/params.json`）。
         周二现在没有任何特殊阈值（旧的周二 65 / 周二 60 已删除）。
-        有硬阈值时取 max(配置值, 硬阈值)，配置调高时以配置为准。
+        有硬阈值时取 max(策略参数, 硬阈值)，参数调高时以参数为准。
         """
-        base = int(self.config.get("休息精力阈值"))
+        base = int(params.get("rest.stamina_threshold"))
         if day == "四":
-            hard = THURSDAY_REST_THRESHOLD_BY_STYLE.get(self.style)
+            hard = params.get("rest.thursday_threshold_by_style").get(self.style)
             if hard is not None:
                 return max(base, hard)
         return base

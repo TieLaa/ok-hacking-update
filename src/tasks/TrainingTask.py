@@ -43,15 +43,16 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
                    StaminaHandlers, UnmarkedHandlers, BaseGirlsTask):
 
     def load_config(self):
-        """加载配置前先把老「体力」键名搬成「专注 / 精力」（2026-11-02 规范用词）。
+        """加载配置前先迁移老存档：旧键名搬值 / 旧选项换值 / 语义变了的旧值丢弃。
 
         时机不能改：`Config.__init__` → `verify_config()` 会**丢掉**所有
         `default_config` 里没有的键，旧键在那之后就找不回来了。
         见 `training/config_spec.migrate_saved_config`。
         """
         try:
-            if config_spec.migrate_saved_config(self.__class__.__name__):
-                self.log_info("配置迁移：旧键名「体力 / 专注」已按「精力」改写，值保留")
+            changed = config_spec.migrate_saved_config(self.__class__.__name__)
+            if changed:
+                self.log_info("配置迁移：" + "；".join(changed))
         except Exception as e:                      # noqa: BLE001
             self.log_warning(f"配置迁移跳过（{type(e).__name__}: {e}）")
         super().load_config()
