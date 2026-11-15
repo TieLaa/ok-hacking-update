@@ -63,7 +63,7 @@ class StaminaHandlers:
         于是「差 25 → 取消 → 再点训练 → 又差 25」无限循环（和 2026-10-26 休息确认
         那次是同一类事故）。
 
-        **「自动恢复精力」关掉时反着来**（用户 2026-11-05 监控页新增
+        **「自动恢复专注」关掉时反着来**（用户 2026-11-05 监控页新增
         「允许吃专注药」开关，关 = 一口都不喝）：**先点「取消」关掉这个弹窗**，
         然后停止任务（`_abort_reason`，与 `stop_for_no_captain` 同一条链路），
         弹窗提示用户。用户 2026-11-05 口径：专注不足跟「休息」没关系，
@@ -73,7 +73,7 @@ class StaminaHandlers:
         """
         if self.match_text(texts, self.SHORT_TEXTS) is None:
             return False
-        if not self.config.get("自动恢复精力"):
+        if not self.config.get("自动恢复专注"):
             cancel = self.exact_text(texts, labels.BUTTONS["exit_hatch"])
             if cancel is not None:
                 self.click_box(cancel, after_sleep=0.8)
@@ -117,7 +117,7 @@ class StaminaHandlers:
             return False
         # 用户 2026-11-05 监控页「允许吃专注药」开关：关掉时这一页一律不喝，
         # 直接关掉走人（钻石行本来就是结构性禁止，这里连饮料也不碰）。
-        if not self.config.get("自动恢复精力"):
+        if not self.config.get("自动恢复专注"):
             self._stamina_need = None
             self.log_info("专注恢复页：允许吃专注药=关 → 不喝，直接关闭这一页", notify=True)
             self._stamina_giveup_at = time.monotonic()
@@ -224,7 +224,7 @@ class StaminaHandlers:
         | 怎么进来的 | 目标 |
         |---|---|
         | 「训练所需专注还差 N」弹窗（`_stamina_need = N`） | 当前 + N |
-        | 大厅主动补（`ensure_stamina`，专注 < `恢复精力下限`） | 补到 `恢复精力下限` |
+        | 大厅主动补（`ensure_stamina`，专注 < `恢复专注下限`） | 补到 `恢复专注下限` |
         | 兜底（两种情况都没记） | 补满 |
 
         数值来源优先**顶栏**（`top_bar` 自带专注条像素兜底）；页面上那个大数字
@@ -241,7 +241,7 @@ class StaminaHandlers:
         if need:
             target = min(mx, cur + int(need))
         else:
-            floor = int(self.config.get("恢复精力下限") or 0)
+            floor = int(self.config.get("恢复专注下限") or 0)
             target = min(mx, max(floor, 0))
         return max(0, target - cur)
 
@@ -293,13 +293,13 @@ class StaminaHandlers:
     def ensure_stamina(self, need=None):
         """专注低于 `need` 就主动点「+」进恢复页。返回 True = 这一拍去补了。
 
-        - `need` 省略时用配置 `恢复精力下限`（默认 30）；
+        - `need` 省略时用配置 `恢复专注下限`（默认 30）；
         - 只在**大厅 / 训练剧本**这类「顶栏有 +」的页面生效：训练内的顶栏
           药丸没有「+」（`parsers.stamina_plus_point` 会返回 None → 这里直接放弃），
           免得在科目页瞎点；
-        - 配置 `自动恢复精力` 关掉就什么都不做。
+        - 配置 `自动恢复专注` 关掉就什么都不做。
         """
-        if not self.config.get("自动恢复精力"):
+        if not self.config.get("自动恢复专注"):
             return False
         # 刚刚试过但没饮料可喝 → 60 秒内不再折腾（否则「点+ → 关页」会无限循环）
         giveup = getattr(self, "_stamina_giveup_at", 0.0)
@@ -310,10 +310,10 @@ class StaminaHandlers:
         if cur is None or mx is None:
             return False
         if need is None:
-            need = int(self.config.get("恢复精力下限") or 0)
+            need = int(self.config.get("恢复专注下限") or 0)
         if cur >= need:
             return False
-        self._stamina_need = None        # 主动补：目标 = 恢复精力下限（不是补满）
+        self._stamina_need = None        # 主动补：目标 = 恢复专注下限（不是补满）
         if not self.open_stamina_recover():
             return False
         self.log_info(f"专注 {cur}/{mx} < {need} → 主动进专注恢复页")

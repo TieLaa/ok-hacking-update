@@ -391,7 +391,7 @@ class MonitorTab(CustomTab):
             # 队列参数由 `TrainingFlowMixin.captain_queue_spec()` 从这三个键派生。
             "score_stop": bool(config.get("刷到目标分")),
             "score_target": str(config.get("目标分") or ""),
-            "stamina_allowed": bool(config.get("自动恢复精力")),
+            "stamina_allowed": bool(config.get("自动恢复专注")),
             "fail_limit": config.get("失败率上限(%)", MISSING),
             "stuck": info.get("stuck") or (
                 f"3 秒无响应 / 日 {config.get('单日最大点击数', MISSING)} 次 · 未触发"),
@@ -601,7 +601,7 @@ class MonitorTab(CustomTab):
     # `task._queue_spec` 之类内存字段里挂参数（那个通道只留给 CLI/MCP 注入）。
     # 达标判定和提前终止由 `handlers/match.handle_training_score`（训练评分页）
     # 和 `flow.advance_queue_after_round`（注册球员页）做。
-    # - 「允许吃专注药」= `自动恢复精力`。钻石购买在 `handlers/stamina.py`
+    # - 「允许吃专注药」= `自动恢复专注`。钻石购买在 `handlers/stamina.py`
     #   是结构性禁止（钻石行没有「使用」按钮 → `forbidden`）。
 
     def set_score_stop(self, enabled: bool):
@@ -705,7 +705,7 @@ class MonitorTab(CustomTab):
             logger.warning(f"界面提示发送失败（只写日志）: {e}")
 
     def set_stamina_allowed(self, allowed: bool):
-        """「允许吃专注药」：映射到 `自动恢复精力`。
+        """「允许吃专注药」：映射到 `自动恢复专注`。
 
         关掉后 `ensure_stamina` 不再进恢复页；「训练所需专注还差 N」弹窗
         仍会点「回复」进页 —— 但没有可用饮料时（用户不勾 = 通常没饮料）
@@ -717,8 +717,8 @@ class MonitorTab(CustomTab):
             logger.warning("监控页：没有找到训练任务，「允许吃专注药」未保存")
             return
         value = bool(allowed)
-        if bool(task.config.get("自动恢复精力")) != value:
-            task.config["自动恢复精力"] = value
+        if bool(task.config.get("自动恢复专注")) != value:
+            task.config["自动恢复专注"] = value
             logger.info("监控页：允许吃专注药 → " + ("开（专注不足自动喝饮料，不花钻石）"
                                               if value else "关（专注不足也不喝，宁停不耗）"))
         self._update_data()

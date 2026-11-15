@@ -205,6 +205,10 @@ class EntryHandlers:
         实机（2026-10-25）：右侧 2x2 四张卡，选中的人名字显示在底部中间
         （「SSR 佐久间 雨乃」）。配置 `指定队长` 填名字时，逐张点开比对，
         找到就点「下一步」；留空时沿用旧逻辑（点第一张，等级最高）。
+
+        第一拍先看底部中间已经显示的是谁（用户 2026-11-15 口径）：进页面时
+        游戏会恢复上次选的队长，反复跑同一队长时名字早就在那儿了，直接下一步
+        比重开筛选省 4 次点击；不是目标才去开筛选。
         """
         # 必须**整词**：`match_text` 的「整段拼接」兜底会把训练日主界面里的
         # 「…都给我好好训练」+「核心评分提升！」拼成「训练核心」，于是主界面被当成
@@ -219,6 +223,14 @@ class EntryHandlers:
 
         want = self.configured_captain()
         if want and not getattr(self, "_captain_filter_done", False):
+            current = self.read_captain_name(texts)
+            if current and labels.name_matches(want, current):
+                self._captain_filter_done = True
+                self._captain_matched_config = True
+                self.log_info(f"选队长：已选中「{current}」→ 跳过筛选")
+                ok = self.click_button_and_expect("next", ("选择队友",), timeout=8)
+                self.log_info("进入选择队友" if ok else "点「下一步」没反应")
+                return True
             # 2026-11-13 用户流程：选队长前先「显示设定 → 筛选」，按稀有度
             # 和位置把卡池缩小，再走原来的逐张找名字（不在池里才停）。
             target = self.match_text(texts, "筛选")

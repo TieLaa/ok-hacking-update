@@ -27,8 +27,10 @@ from src.tasks.training.constants import (
     WORK_STAMINA_COST)
 from src.tasks.ui import labels
 
-# 周末计划的一步：place=地点名，urgent=True=急招临时插队（不是今天的主计划）。
-WeekendStep = namedtuple("WeekendStep", "place urgent")
+# 周末计划的一步：place=地点名，urgent=True=急招临时插队（不是今天的主计划），
+# probe=True=探卡池（所有流派出行日的第一步：只去步行街找笔记继承/球员位置）。
+WeekendStep = namedtuple(
+    "WeekendStep", "place urgent probe", defaults=(False,))
 
 # 一次地图决策的只读上下文。钱/精力等易变值**不存进 DayState**（2026-11-15
 # 用户口径：实例只放一天最多变一次的值），每次决策从同一份 texts 读一次装这里。
@@ -104,6 +106,15 @@ class MapPlace:
         赚 240~420 零用钱**，而商店买牛奶/秘籍不占日期 —— 特训牛奶 50 币
         能让 3 天训练少耗 40% 精力（约 1 个训练日），对训练流严格更划算。
         """
+        # 2026-11-15 用户口径（收窄）：最后一周周六**只打工**。
+        # 原「有划船比赛就去公园」的立论是「比赛给钱和属性」，实跑（11-15 第1周
+        # 周六/周日两帧）证明比赛**不给钱**、只比普通划船多 +10 属性；第7周没有
+        # 训练日、精力不再兑现，235 零用钱换周日商店的 +80~90 属性明显更值。
+        week = self.current_day()[0]
+        if week == SHOP_SEASON_WEEKS and (day or "六") == "六":
+            self.log_info(
+                "周末（第7周周六）：没有训练日 → 去餐厅打工（钱留给周日商店）")
+            return ["餐厅"]
         gap = self.weekend_gap(texts)
         if gap is None:
             return None
@@ -317,7 +328,41 @@ class MapPlace:
         main = self.prefer_venue(texts, places, day)
         steps = [WeekendStep(p, False) for p in main]
         steps = self.event_detour(st, texts, steps, places)
-        return self.vacation_eve_guard(steps, texts, st)
+        steps = self.vacation_eve_guard(steps, texts, st)
+        return self.gacha_probe(steps, st)
+
+    def gacha_probe(self, steps, st=None):
+        """所有流派的出行日：第一步先去步行街找「笔记继承 / 球员位置」。
+
+        用户 2026-11-15 口径：
+        - 不管什么流派、什么零用钱，只要是出行日就先看一眼；
+        - 没有这两张就退出，回地图走原计划（`handle_street` 进门即
+          `mark_tried`，今天只探一次）；
+        - 这趟只买这两张的**彩色**版本（`street.gacha_candidates(allow_others=False)`）。
+
+        例外只有三种（都是游戏/开关的硬限制）：
+        - **第7周周日不能出行**：`today_places` 已返回空计划，这里不插；
+        - `允许进步行街` 关了；
+        - 今天已经探过一次（`gacha_tried` / `visited`）。
+
+        第 3 周海边前周末也照探（用户 2026-11-15 补充口径：这是最高优先级，
+        不看体力）——买到就花掉一天，没买到退出继续原计划。
+
+        计划里已经有步行街（扭蛋流钱够 / 打折改道）时不插：
+        正常模式照旧买最好的卡，这两张已经靠排序键排第一。
+        """
+        if not steps:
+            return steps
+        if not self.config.get("允许进步行街"):
+            return steps
+        if st is None:
+            st = self.day_state()
+        if "步行街" in st.gacha_tried or "步行街" in st.visited:
+            return steps
+        if any(s.place == "步行街" for s in steps):
+            return steps
+        self.log_info("周末：先去步行街找「笔记继承/球员位置」")
+        return [WeekendStep("步行街", False, True)] + steps
 
     # ---------- 事件层：地图标签 → 要不要改道 ----------
 
@@ -483,6 +528,10 @@ class MapPlace:
         同一水平带内（Δcy ≈ 0.06 屏高）。几何跟 `venue_on_discount` 一致，
         只是关键字换成「急招」；标签必须在名字左边，别把台词里的「急招」算进来。
         """
+        return self._venue_label_left(texts, place, ("急招",))
+
+    def _venue_label_left(self, texts, place, keywords):
+        """地点名字左侧、同一水平带内有没有某个标签。"""
         if not texts:
             return False
         box = self._venue_box(texts, place)
@@ -492,7 +541,7 @@ class MapPlace:
         cy = box.y + box.height / 2
         for t in texts or []:
             name = t.name.replace(" ", "")
-            if "急招" not in name:
+            if not any(k in name for k in keywords):
                 continue
             tcx = t.x + t.width / 2
             tcy = t.y + t.height / 2

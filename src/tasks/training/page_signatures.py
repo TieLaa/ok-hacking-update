@@ -52,6 +52,7 @@
   - `MainAction("VS", ...)` → 右下角主按钮区域（训练日主界面 / 比赛开场页）。
 """
 
+from src.tasks.training import pages as page_registry
 from src.tasks.ui import labels
 
 
@@ -96,6 +97,22 @@ class MainAction:
         self.words = words
 
 
+class Anchor:
+    """标记一个签名**直接复用 `pages.py` 的页面锚点**（判据单一来源）。
+
+    2026-11-15 事故（用户同一段剧情撞了两次）：`training_plan` 原来是裸词
+    「训练计划」，事件选项页正文写着「独一无二的训练计划」→ 签名命中 →
+    `handle_event_choice` 见「这是别的页面」直接让位 → 全表无人认领 →
+    兜底点屏幕中央（那位置是对话框，点不动）→ 3 轮无变化停任务。
+    页面锚点用「左上角标题区 + 整周课表」判，正文词不会算进来。
+    """
+
+    __slots__ = ("page",)
+
+    def __init__(self, page):
+        self.page = page
+
+
 # 页面 ID → 特征词组。
 # 组之间是「或」，组内是「且」。只放**页面级强特征**。
 SIGNATURES = {
@@ -105,8 +122,9 @@ SIGNATURES = {
     "training_subject": ((Exact("决定"),),),
     # 训练日主界面 / 比赛开场页：右下角主按钮写着 VS / 比赛 / 训练
     "training_hub": ((MainAction("VS", "比赛", "训练"),),),
-    # 训练计划（日历）页
-    "training_plan": (("训练计划",),),
+    # 训练计划（日历）页。2026-11-15：裸词「训练计划」会撞正文，改成页面锚点
+    # （左上角「XX的训练计划」标题；判据在 `pages._is_training_plan`）。
+    "training_plan": ((Anchor("training_plan"),),),
     # 关卡列表页（**不是**比赛结算页）：右侧栏目成对出现。
     # 2026-11-14 改名：原来叫 `match_result`，和 `pages.py` 的
     # `match_result`（比赛结算页）同名但判据完全不同 ——
@@ -162,6 +180,8 @@ def _match_word(task, texts, word):
     if isinstance(word, MainAction):
         action = task.texts_in_region(texts, "main_action")
         return task.match_text(action, word.words) is not None
+    if isinstance(word, Anchor):
+        return page_registry.is_page(task, texts, word.page)
     return task.match_text(texts, word) is not None
 
 

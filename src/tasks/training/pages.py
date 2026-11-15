@@ -265,9 +265,18 @@ def _is_training_hub(task, texts):
     2026-11-14 实跑：这一页 16 帧掉进 unknown。
     只看 `main_action` 区域（右下角）—— 全屏的台词里也会出现「比赛」「训练」，
     用它判会把剧情页抢走。
+
+    2026-11-15 百目鬼「周六加训」：这一页的「训练」在**上一格**
+    （`extra_train`，平时「休息」的位置），main_action 那一格被「出行」占了。
+    实拍 `logs/1115-155619_百目鬼剑/events/1115-160121_handle_go_out.jpg`
+    （训练框 1332,548）：只查 main_action 会判成 `go_out` → 整个周六加训被点掉。
+    按钮上的彩框只是「里面有彩框科目」，不参与识别。
     """
     action = task.texts_in_region(texts, "main_action")
-    return task.match_text(action, ("VS", "比赛", "训练")) is not None
+    if task.match_text(action, ("VS", "比赛", "训练")) is not None:
+        return True
+    top = task.texts_in_region(texts, "extra_train")
+    return task.exact_text(top, ("训练",)) is not None
 
 
 def _is_breath_difficulty(task, texts):
@@ -477,8 +486,15 @@ def _is_go_out(task, texts):
     和 `weekend_map`（出行地图，整框地点名 ≥2）分开 ——
     2026-11-14 拆分：两者是**两个页面**，之前合并导致 42% 的地图帧
     被当成首页（首页有「出行」，地图没有）。
+
+    2026-11-15：百目鬼「周六加训」页也有「出行」，但**上一格是「训练」**——
+    那是训练日入口，不是周末首页（实拍 `logs/1115-155619_百目鬼剑/events/
+    1115-160121_handle_go_out.jpg`：训练框 1332,548、出行框 1296,702）。
     """
     if len(_short_place_names(texts)) >= 2:
+        return False
+    top = task.texts_in_region(texts, "extra_train")
+    if task.exact_text(top, ("训练",)) is not None:
         return False
     return task.exact_text(texts, ("出行",)) is not None
 
@@ -796,6 +812,16 @@ _ANCHORS = {
     "breath_difficulty": _is_breath_difficulty,
     "stamina_short": _is_stamina_short,
 }
+
+
+def is_page(task, texts, page):
+    """`page` 的锚点判据（`page_signatures` 复用，判据只写一份）。
+
+    2026-11-15：签名表原来自己写「训练计划」裸词，事件选项页正文里
+    一句「独一无二的训练计划」就把整页排成日历页 → 事件 handler 让位 →
+    全表无人认领 → 兜底点屏幕中央（对话框）→ 3 轮无变化停任务。
+    """
+    return _ANCHORS[page](task, texts)
 
 
 def classify_page(task, texts):

@@ -30,6 +30,7 @@
 
 from src.tasks.ui import labels
 from src.tasks.training import attributes
+from src.tasks.training import params
 from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK,
                                           SHOP_BASE_CATEGORY, SHOP_ITEMS,
                                           SHOP_ITEM_PREFIX,
@@ -524,13 +525,21 @@ class ShopPlace:
             if not kept:
                 return None, "第 7 周不买牛奶/精力，关店"
 
-        # 余额
+        # 余额（2026-11-15 用户口径）：**最后一天之前**买完要剩 120，
+        # 保证出行日还买得起步行街那两张「笔记继承 / 球员位置」。
+        # 不限定流派 —— 训练流商店上新最频繁，以前每次上新都会把钱花光。
+        floor = 0 if final_match else int(params.shop.keep_money_before_last_day)
+        budget = None if money is None else money - floor
         affordable = [i for i in kept
                       if i["price"] == 0
-                      or (money is not None and i["price"] <= money)]
+                      or (budget is not None and i["price"] <= budget)]
         if not affordable:
-            return None, ("没有买得起的商品了"
-                          + ("；零用钱读不到，不盲买" if money is None else ""))
+            if money is None:
+                return None, "没有买得起的商品了；零用钱读不到，不盲买"
+            if floor:
+                return None, (f"没有买得起的商品了（零用钱 {money}，"
+                              f"要留 {floor} 给扭蛋）")
+            return None, "没有买得起的商品了"
 
         # 时限商品：剩余训练日不够就不买
         days_left = self.training_days_left()

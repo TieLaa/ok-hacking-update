@@ -798,6 +798,54 @@ class MatchHandlers:
             why = "另一个是纯回精力 → 选收益未知的那个"
         return pick, why
 
+    def _yellow_choice_group(self):
+        """底部黄框里「成行 / 成列、尺寸相近」的那一组（事件选项）。
+
+        返回 `(组, "h"/"v")`；组内元素是 `(x, y, w, h)`。没有成形的组返回 `([], None)`。
+
+        2026-11-15 用户口径：**这类事件只看下面两个选择框** —— 形态就是页面身份。
+        入口靠它跳过正文类页面签名（正文里「训练计划」四个字曾让整页没人认领）。
+        实测回归集：底部成行两个黄框只出现在事件二选一页；扭蛋页那两个在 y≈0.67。
+        """
+        buttons = self._yellow_buttons()
+        if len(buttons) < 2:
+            return [], None
+
+        def center(b):
+            return b[0] + b[2] / 2, b[1] + b[3] / 2
+
+        def similar(a, b):
+            return (max(a[2], b[2]) / max(min(a[2], b[2]), 1) < 2.6
+                    and max(a[3], b[3]) / max(min(a[3], b[3]), 1) < 2.2)
+
+        best_group, best_kind = [], None
+        by_y = sorted(buttons, key=lambda b: b[1])
+        for i, b in enumerate(by_y):
+            group = [b]
+            for c in by_y[i + 1:]:
+                if abs(center(b)[1] - center(c)[1]) < self.height * 0.05 and similar(b, c):
+                    group.append(c)
+            if len(group) > len(best_group):
+                best_group, best_kind = group, "h"
+        by_x = sorted(buttons, key=lambda b: b[0])
+        for i, b in enumerate(by_x):
+            group = [b]
+            for c in by_x[i + 1:]:
+                if abs(center(b)[0] - center(c)[0]) < self.width * 0.12 and similar(b, c):
+                    group.append(c)
+            if len(group) > len(best_group):
+                best_group, best_kind = group, "v"
+        if len(best_group) < 2:
+            return [], None
+        # 2026-10-29 实机：上下两个选项被当成横向，机器人选了下面那个。
+        # 用几何形状兜底：一组按钮的纵向跨度 > 横向跨度，就是竖排 → 选最上面。
+        centers = [center(b) for b in best_group]
+        dx = max(c[0] for c in centers) - min(c[0] for c in centers)
+        dy = max(c[1] for c in centers) - min(c[1] for c in centers)
+        if dy > dx:
+            best_kind = "v"
+        return best_group, best_kind
+
     def handle_event_choice(self, texts):
         """突发事件二/三选一：必须点其中一个选项（右上「跳过」是灰的）。
 
@@ -829,7 +877,14 @@ class MatchHandlers:
         # 全是在说「我不是这些页面」。现在改成一次签名查询：
         # 「这一帧命中了别的页面签名吗」。
         # 签名表在 `src/tasks/training/page_signatures.py`，各页面只声明一次。
-        if page_signatures.page_is_other(self, texts, "event_choice"):
+        # 底部成行的那两个黄框 = 这页的**形态身份**（用户 2026-11-15 口径：
+        # 这种事件只看下面两个选择框）。有它就不许正文词把整页排掉 ——
+        # 「独一无二的训练计划」曾让同一段剧情两次没人认领、卡死。
+        # 0.78 是实测分界：事件按钮在 0.87；扭蛋页那两个黄卡在 0.67。
+        group_yellow, _ = self._yellow_choice_group()
+        bottom_pair = (len(group_yellow) >= 2
+                       and min((b[1] + b[3] / 2) / self.height for b in group_yellow) >= 0.78)
+        if not bottom_pair and page_signatures.page_is_other(self, texts, "event_choice"):
             return False
         # 训练科目页也有黄色卡片（器材卡）和底部属性面板，但它们不是选项。
         # 科目页必有「失败率」，并且「决定」是**独立的按钮框**（实训 2026-10-26）。
@@ -935,47 +990,12 @@ class MatchHandlers:
             self.click_box(pick, after_sleep=0.45)
             return True
 
-        buttons = self._yellow_buttons()
-        if len(buttons) < 2:
-            return False
-
         # 只接受「排成一行」或「排成一列」且尺寸相近的按钮组。
         # 训练剧本页也有黄色「启程」大按钮 + 标题里的黄色碎片，但两者是斜对角，
         # 既不成行也不成列，必须排除（实训 2026-10-26）。
-        def center(b):
-            return b[0] + b[2] / 2, b[1] + b[3] / 2
-
-        def similar(a, b):
-            return (max(a[2], b[2]) / max(min(a[2], b[2]), 1) < 2.6
-                    and max(a[3], b[3]) / max(min(a[3], b[3]), 1) < 2.2)
-
-        best_group, best_kind = [], None
-        by_y = sorted(buttons, key=lambda b: b[1])
-        for i, b in enumerate(by_y):
-            group = [b]
-            for c in by_y[i + 1:]:
-                if abs(center(b)[1] - center(c)[1]) < self.height * 0.05 and similar(b, c):
-                    group.append(c)
-            if len(group) > len(best_group):
-                best_group, best_kind = group, "h"
-        by_x = sorted(buttons, key=lambda b: b[0])
-        for i, b in enumerate(by_x):
-            group = [b]
-            for c in by_x[i + 1:]:
-                if abs(center(b)[0] - center(c)[0]) < self.width * 0.12 and similar(b, c):
-                    group.append(c)
-            if len(group) > len(best_group):
-                best_group, best_kind = group, "v"
-        if len(best_group) < 2:
+        buttons, best_kind = self._yellow_choice_group()
+        if len(buttons) < 2:
             return False
-        buttons = best_group
-        # 2026-10-29 实机：上下两个选项被当成横向，机器人选了下面那个。
-        # 用几何形状兜底：一组按钮的纵向跨度 > 横向跨度，就是竖排 → 选最上面。
-        centers = [(b[0] + b[2] / 2, b[1] + b[3] / 2) for b in buttons]
-        dx = max(c[0] for c in centers) - min(c[0] for c in centers)
-        dy = max(c[1] for c in centers) - min(c[1] for c in centers)
-        if dy > dx:
-            best_kind = "v"
 
         infos = []
         room = self.stamina_room(texts)
@@ -995,12 +1015,10 @@ class MatchHandlers:
             effects = [t for t in inside if any(ch.isdigit() for ch in t.name)]
             name_box = max(names, key=lambda t: t.height) if names else None
             name = name_box.name.strip() if name_box else "?"
-            ev = self._effect_ev(effects)
-            attrs = any(any(a in t.name for a in labels.TRAINING_SUBJECTS)
-                        for t in effects)
-            # 「纯回精力」= 只补精力、不加任何六维属性。带属性的（「精力+10，投射+5」）不算，
-            # 否则会把好选项也一起排除掉。
-            flat_stamina = (any("精力" in t.name for t in effects) and not attrs)
+            # 统一口径（`scoring.effect_value`，事件选项和加强训练共用）：
+            # 只有**纯**回精力才算 flat。「精力上限+10」是永久上限、
+            # 「精力+10，投射+5」带属性，都不能被当成「只补精力」排除掉。
+            ev, flat_stamina = self.effect_value(effects)
             infos.append({"x": bx, "y": by, "box": (bx, by, bw, bh),
                           "name": name, "name_box": name_box,
                           "ev": ev, "flat": flat_stamina,

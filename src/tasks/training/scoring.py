@@ -58,6 +58,20 @@ class TrainingScoringMixin:
     QUALITY_RANK = {"彩": 4, "金": 3, "紫": 2, "蓝": 1, "其他": 0}
 
     @classmethod
+    def pick_by_stamina(cls, ranked, after, limit):
+        """按权重顺序挑第一个「训练后精力 ≥ limit」的科目；全都低于返回 None。
+
+        `after` = 科目页顶栏读到的**训练后**精力（`None` = 读不到 → 不拦，
+        与项目里「读不到就不拦」的惯例一致）。
+        用户 2026-11-15 口径：第4周周三要保住周四那一练，宁可换一个科目。
+        """
+        for name in sorted(ranked, key=ranked.get, reverse=True):
+            value = after.get(name)
+            if value is None or value >= limit:
+                return name
+        return None
+
+    @classmethod
     def quality_card_order(cls, cards):
         """按 品质 → 队友数 → 靠右 排序，返回 (选中项, 全表)。
 

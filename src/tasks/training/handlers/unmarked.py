@@ -37,6 +37,10 @@ class UnmarkedHandlers:
         # 这里不再自己维护一份。
         if page_signatures.page_has(self, texts, "exclusive_page"):
             return False
+        # 日历页（训练计划）原来靠 exclusive_page 的裸词「训练计划」挡，
+        # 2026-11-15 挪到这里：裸词会被事件页正文误伤，锚点判据不会。
+        if page_signatures.page_has(self, texts, "training_plan"):
+            return False
         if page_signatures.page_has(self, texts, "weekend_map"):
             return False
         # 「下一步」不收进签名表（2026-11-14 实测）：锦标赛对阵图只有

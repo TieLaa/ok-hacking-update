@@ -16,6 +16,9 @@
 
 品质优先级（用户 2026-10-26，2026-11-01 更新）：
 
+    0. **「笔记继承 / 球员位置」的彩色版本永远第一**（用户 2026-11-15 口径）：
+       压过零用钱卡和品质分。所有流派的出行日都先进步行街找它们
+       （`places/map.py: gacha_probe`），探卡池时也只买这两张；
     1. 品质优先级 **彩色 > 金色 > 紫色**（彩色是训练等级提升后解锁的最高品质）；
        蓝色、其他一律不买（宁可退出）；
     2. 同等情况下**先「增强款」，再有队友加成的，然后才是恢复精力的**
@@ -61,6 +64,7 @@
 
 from src.tasks.ui import labels
 from src.tasks.training import attributes
+from src.tasks.training import params
 from src.tasks.training.constants import SHOP_SEASON_WEEKS
 
     # 地点名（地图上的按钮文字 / 状态里的键）
@@ -70,6 +74,25 @@ PLACE = "步行街"
 # （2026-11-15 用户口径）。名单只列六维：同名的「熟练度暴涨」是器材熟练度，
 # 不在名单里；运行时**不要**改成泛匹配「暴涨」。
 SURGE_NAMES = tuple(f"{a}暴涨" for a in labels.TRAINING_SUBJECTS)
+
+# 「笔记继承」「球员位置」：用户 2026-11-15 口径 —— 彩色版本是**全局第一优先**，
+# 压过零用钱卡和品质分。所有流派的出行日都先进步行街找它们；
+# 探卡池模式（`allow_others=False`）下只买这两张，其他卡一张都不买。
+TOP_GACHA_NAMES = ("笔记继承", "球员位置")
+
+
+def top_gacha_key(name):
+    """「笔记继承 / 球员位置」→ 它的关键字；不是这两张返回 None。"""
+    for key in TOP_GACHA_NAMES:
+        if key in (name or ""):
+            return key
+    return None
+
+
+def is_top_gacha(card):
+    """这张扭蛋卡是不是「笔记继承 / 球员位置」的**彩色**版本？"""
+    return (card.get("quality") == "彩"
+            and top_gacha_key(card.get("name")) is not None)
 
 
 class StreetPlace:
@@ -119,15 +142,30 @@ class StreetPlace:
 
     # ---------- 买哪张卡（纯判断，不点击） ----------
 
+    def top_gacha_got(self):
+        """这一局已经买到过哪几张「笔记继承 / 球员位置」（存关键字）。
+
+        用户 2026-11-15 口径：两张都到手之后，探卡池就不用再为它们留 120 了。
+        每局重置在 `flow._run_one_round`。
+        """
+        got = getattr(self, "_top_gacha_got", None)
+        if got is None:
+            got = self._top_gacha_got = set()
+        return got
+
     def gacha_candidates(self, cards, stamina, stamina_max, money,
                          required=None, attrs=None, caps=None, gap_limit=100,
-                         week=None):
+                         week=None, allow_others=True):
         """三张卡里哪些值得买、买哪张。
 
         返回 (best, detail, all_cards)：
         - `best` 是要买的那张（None = 没有可买的）
         - `detail` 是给人看的候选清单（日志用）
         - `all_cards` 是全部三张（不管买不买）
+
+        `allow_others=False` = **探卡池模式**（用户 2026-11-15 口径）：
+        今天本来不该进步行街，只为「笔记继承 / 球员位置」来的，
+        其他卡一张都不买；买没买到都退出，回地图走原计划。
 
         参数里 `stamina` / `money` / `week` 可能是 None（读不到）——
         读不到零用钱或价格时**不买**（买不起点「确定」游戏不扣钱、页面也不关，
@@ -205,7 +243,26 @@ class StreetPlace:
             return None
 
         ok = []
+        # 探卡池要留的零花钱：和商店同一条储备线（`shop.keep_money_before_last_day`），
+        # 钱留给「笔记继承 / 球员位置」。
+        probe_reserve = int(params.shop.keep_money_before_last_day)
+        # 两张目标卡**都到手之后**就不用再留了（用户 2026-11-15 口径）。
+        got = self.top_gacha_got()
+        need_reserve = any(key not in got for key in TOP_GACHA_NAMES)
         for c in cards:
+            # 探卡池模式（用户 2026-11-15 口径）：
+            #   - 目标卡「笔记继承 / 球员位置」的彩色版：照买；
+            #   - **其它彩色卡也买**：彩是最高品质（商店同价只能买紫/金）；
+            #   - 但两张目标卡还没到手时，只能用「留够 120 以上的闲钱」——
+            #     花它不能动那 120 的储备，否则目标卡真出现时买不起。
+            if not allow_others and not is_top_gacha(c):
+                price = c["price"]
+                spare = (money is not None and price is not None
+                         and money - price >= probe_reserve)
+                if not (c["quality"] == "彩" and (spare or not need_reserve)):
+                    c["reject"] = (f"探卡池只买笔记继承/球员位置"
+                                   f"（彩卡要留 {probe_reserve}）")
+                    continue
             # 品质白名单对**所有**卡生效，清空卡也不例外（用户 2026-11-04：
             # 「怎么买了一个蓝色的，不是不买吗」）。
             # 2026-11-04 23:56 实跑就是这么买错的：这两条以前写成 `if clear / elif
@@ -234,7 +291,7 @@ class StreetPlace:
             # 符合本流派的**优先买**，不符的**跳过**。
             card_style = attributes.card_style_target(c.get("name"), c.get("effect"))
             if card_style is not None and card_style != self.style:
-                c["reject"] = f"{card_style}流专属"
+                c["reject"] = f"{card_style}专属"
                 continue
             # 属性取向（2026-11-13）：该属性缺口不足阈值 → 不买（加了会溢出）。
             target = attributes.item_attr_target(c.get("name"))
@@ -296,8 +353,8 @@ class StreetPlace:
             return None, detail, cards
         # 取舍顺序（用户 2026-11-07 口径：**同等条件下恢复精力的优先级最低**，
         # 取代 2026-10-27/11-03 的「恢复卡同分要赢」；都相同再比价格）：
-        # **流派专属卡** → **零用钱卡** → 品质 → 属性档 → 增强款 → 队友 →
-        # **非恢复优先** → 恢复价值 → 便宜的。
+        # **笔记继承/球员位置（彩色）** → **流派专属卡** → **零用钱卡** → 品质 →
+        # 属性档 → 增强款 → 队友 → **非恢复优先** → 恢复价值 → 便宜的。
         # 非恢复卡恒为 1、恢复卡恒为 0，恢复卡只有池里全是恢复卡时才轮得到。
         # 2026-11-08 修：判据从 `recover > 0` 改成按效果文本
         # （`is_stamina_recover_card`）——「精力补充」这类**全部恢复卡 recover=0**，
@@ -308,6 +365,7 @@ class StreetPlace:
         # 同品质时比普通属性卡更该买；不符合流派的已在闸门那一步跳过。
         # 注意**不跨品质**：训练增强（紫，+3 点）不该压过运控增加+++（金，+100）。
         best = max(ok, key=lambda c: (
+            int(is_top_gacha(c)),
             c.get("money_rank", 0), c["score"], c.get("style_rank", 0),
             -c.get("attr_rank", 2),
             bool(c.get("enhanced")), c["mate"],

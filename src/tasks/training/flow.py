@@ -210,6 +210,9 @@ class TrainingFlowMixin:
 
     def _run_one_round(self):
         self._steps = 0
+        # 每局重置：这一局已经买到过哪几张「笔记继承 / 球员位置」（见
+        # `places/street.top_gacha_got`）。不清就会拿上一局的记录少留 120。
+        self._top_gacha_got = set()
         # 日志文件自检（2026-11-10）：GUI 跑任务时 ok 的 FileHandler 会失踪，
         # 整场运行没有日志落盘。这里每次开局确认一次，没有就由我们补一个
         # 写 logs/run.log 的 handler（细节见 src/util/log_fallback.py）。
@@ -1273,7 +1276,13 @@ class TrainingFlowMixin:
         return self.today_places(day, st, texts)
 
     def rest_threshold(self, day=None):
-        """今天「精力低于多少就休息」。
+        """「精力」门槛（**默认只给两处用，不再决定普通训练日是否休息**）。
+
+        2026-11-15 用户口径：训练日一律先进科目页，精力低也先试
+        （`daycycle.training_day_action`）；本函数的门槛还剩两处：
+          1. **周四硬阈值**：扭蛋流 / 小游戏流 60 —— 低精力休息是为了保证
+             周五能进出行地图（`training_day_action` 的例外分支）；
+          2. **第4周周三挑科目**：要求「训练后精力 ≥ 这个值」（`stamina_gate_day`）。
 
         用户 2026-11-04：**扭蛋流 / 小游戏流**在周四有硬阈值 **60**
         （`rest.thursday_threshold_by_style`，取代旧的「周二 65」）；**其它流派
@@ -1288,3 +1297,14 @@ class TrainingFlowMixin:
             if hard is not None:
                 return max(base, hard)
         return base
+
+    def stamina_gate_day(self, texts=None):
+        """今天选科目要不要保证「训练后精力 ≥ 休息阈值」。
+
+        用户 2026-11-15 口径：**第4周周三**。第4周是海边合宿，周四那天是
+        全队友参与的训练（收益最高），周三练完精力掉到 50 以下就只能休息，
+        那天就白丢了（1115 实跑：周三 73 → 练完 33 → 周四休息）。
+        别把这条推广到每一天：「换下一个科目」只在日程价值最高的那一天划算。
+        """
+        week, day = self.current_day(texts)
+        return week == 4 and day == "三"

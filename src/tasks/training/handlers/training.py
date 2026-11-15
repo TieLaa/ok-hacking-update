@@ -30,6 +30,11 @@ class TrainingHandlers:
     # 代价：每天多等一拍（≈0.5 秒）。换的是一次不可撤销的错误点击。
     HUB_SETTLE_TICKS = 1
 
+    # 周六加训页（上一格「训练」、下一格「出行」）：点「训练」最多试几次。
+    # 用户 2026-11-15 口径：「有就进，万一是意识训练还能回复一点精力，不行就退出来
+    # 继续出行」——所以不看精力阈值，但点了没翻页（精力真不够时游戏不认）就改出行。
+    EXTRA_TRAIN_TRIES = 2
+
     # 训练日「出行」按钮最多点几次。
     # 2026-11-03 14:48 实测（用户：「星期5没进出行地图」）：那一拍点「出行」
     # @(1373,465) 没生效，下一拍页面还停在训练日主界面、直接去点了「训练」；
@@ -212,10 +217,26 @@ class TrainingHandlers:
         **判断在 `training/daycycle.py`**（用户 2026-11-01 的架构）：
         「今天练还是休」「今天要不要外出」这两个**新一天入口**是同级的，
         都归那个模块；这里只负责「照它说的做」。
+
+        2026-11-15 用户口径：训练日**一律先进科目页**（不看精力数字），
+        科目页判「失败率超限 / 没有合适的科目」才退出来休息；周六加训页
+        没有「休息」按钮，那里改点「出行」。
         """
         if self.match_text(texts, "星期") is None:
             return False
-        if self.match_text(texts, "休息") is None:
+        # 2026-11-15 用户口径（百目鬼的「周六加训」）：那一页**没有「休息」**，
+        # 上一格是带彩框的「训练」，下一格被「出行」占掉。所以判这一页 =
+        # 有「休息」**或**按钮区里有「训练」。
+        # 「训练」只看**两格按钮区**：`main_action`（下一格）+ `extra_train`（上一格）。
+        # 整页搜会把扭蛋页/器材页抢过来（`check_handlers` 的「抢错人」直接报红）。
+        # 彩框（里面有彩框科目时按钮会亮一圈）不参与识别：那是科目属性，不是按钮身份。
+        area = self.texts_in_region(texts, "main_action")
+        top = self.texts_in_region(texts, "extra_train")
+        has_rest = self.match_text(texts, "休息") is not None
+        top_train = self.match_text(top, "训练")
+        has_train = (self.match_text(area, "训练") is not None
+                     or top_train is not None)
+        if not (has_rest or has_train):
             return False
         # 这一页的第几次命中（0 = 刚出现的第一拍）。离开这页时由 LEAVE_RESETS 清零。
         self._hub_ticks = getattr(self, "_hub_ticks", 0) + 1
@@ -235,7 +256,13 @@ class TrainingHandlers:
         #      （`weekend.handle_weekend`）。旧写法点完就记，一点空，
         #      周五当天就被 `handle_go_out`（`outing_done and 非周末 → 退出`）锁死；
         #   3. **点了没进地图 → 下一拍重试**，最多 `OUTING_CLICK_LIMIT` 次。
-        action, reason = self.outing_offer(texts)
+        # 出行的两种身份（2026-11-15 用户口径）：
+        #   - 有「休息」按钮 → 这是**额外的一次外出**（野上泷周五）：先出行，
+        #     回来再按训练/休息走；
+        #   - 没有「休息」按钮（百目鬼「周六加训」）→ 出行就是**休息的替代**：
+        #     先点「训练」进科目页，科目页判不合适才退出来点「出行」。
+        extra_train = not has_rest and top_train is not None
+        action, reason = self.outing_offer(texts) if has_rest else (None, "")
         if action == "点按钮":
             self._outing_wait = 0
             if hub_seen < self.HUB_SETTLE_TICKS:
@@ -285,17 +312,37 @@ class TrainingHandlers:
         if not getattr(self, "_lounge_snapshot_done", False):
             self._lounge_snapshot_done = True
             self.snapshot_lounge(texts)
+        # 周六加训：连点几次「训练」页面都没翻（精力真的不够时游戏不认）→
+        # 退出来按「出行」处理（用户 2026-11-15 口径：有就进，不行就继续出行）。
+        if extra_train and getattr(self, "_extra_train_tries", 0) >= self.EXTRA_TRAIN_TRIES:
+            out = self.match_text(area, "出行")
+            if out is not None:
+                self.click_box(out, after_sleep=0.6)
+                self.log_warning(
+                    f"周六加训：连点 {self.EXTRA_TRAIN_TRIES} 次「训练」都没进科目页"
+                    " → 退出来改「出行」")
+                return True
         action, reason = self.training_day_action(texts)
-        area = self.texts_in_region(texts, "main_action")
         if action == "休息":
             target = self.match_text(area, "休息")
+            if target is None:
+                # 周六加训：没有「休息」，下一格是「出行」（强制休息 / 进不去训练时走这里）
+                target = self.match_text(area, "出行")
+                if target is not None:
+                    self.log_info("周六加训：没有「休息」按钮 → 出行")
             if target is not None:
                 self.click_box(target, after_sleep=0.6)
             else:
                 self.flow_click("day_rest", after_sleep=0.6)
         else:
-            target = self.match_text(area, "训练")
+            # 周六加训：「训练」在上一格（平时「休息」的位置，可能带彩框），
+            # 按文字点它自己那个框；`day_train` 固定坐标是**下一格**，那天会点成「出行」。
+            target = None if has_rest else top_train
+            if target is None:
+                target = self.match_text(area, "训练")
             if target is not None:
+                if extra_train:
+                    self._extra_train_tries = getattr(self, "_extra_train_tries", 0) + 1
                 self.click_box(target, after_sleep=0.6)
             else:
                 self.flow_click("day_train", after_sleep=0.6)
@@ -432,6 +479,7 @@ class TrainingHandlers:
         if fail is not None and fail > limit:
             if self.config.get("失败率超限改休息"):
                 self._force_rest = True
+                self._force_reason = f"失败率 {fail}% 超过上限 {limit}%"
                 self.log_warning(f"失败率 {fail}% > {limit}% → 退出科目页，回主界面休息")
                 # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
                 self.exit_page(after_sleep=0.8)
@@ -461,6 +509,9 @@ class TrainingHandlers:
         current = self.current_subject(texts)
         candidates = [n for n in boxes
                       if n in with_team or n in ring_hit or n == current]
+        if self.stamina_gate_day(texts):
+            # 要「换下一个」就得先知道每个科目的训练后精力 → 这一天六项全测
+            candidates = list(boxes)
         self.log_info("候选科目（小人 " + ("、".join(with_team) if with_team else "无")
                       + "｜圈亮 " + ("、".join(ring_hit) if ring_hit else "无")
                       + "｜当前 " + (current or "无") + "）：" + "、".join(candidates))
@@ -470,11 +521,13 @@ class TrainingHandlers:
         results = {}
         if current in boxes:
             results[current] = self.analyze_preview(texts, subject=current)
+            results[current]["after"] = self.preview_stamina(texts)
             r = results[current]
             self.log_info(
                 f"当前已选「{current}」：队友 {r['mates']}｜经理 {r['manager']}"
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
-                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
+                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}"
+                f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}")
 
         last_probed = None
         for name in candidates:
@@ -493,7 +546,8 @@ class TrainingHandlers:
             self.log_info(
                 f"探测「{name}」：队友 {r['mates']}｜经理 {r['manager']}"
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
-                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
+                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}"
+                f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}")
 
         # 六维当前值：进休息室时已经拍过快照（`parsers.snapshot_lounge`），
         # 这里**优先用那一份**，只有独立调用（回归 / 不带主循环）时才现场补读一次。
@@ -528,6 +582,25 @@ class TrainingHandlers:
             ranked = {n: (self.subject_score(results.get(n)), 0, 0)
                       for n in pool}
         name = max(ranked, key=ranked.get)
+        # 2026-11-15 用户口径：第4周周三要保住周四那一练（精力低于休息阈值就练不了），
+        # 所以按权重顺序挑第一个「训练后精力 ≥ 休息阈值」的科目，不够就换下一个。
+        # 预测值来自科目页顶栏（`parsers.preview_stamina`），是游戏自己算的，不是估的。
+        if self.stamina_gate_day(texts):
+            limit = self.rest_threshold("三")
+            after = {n: (results.get(n) or {}).get("after") for n in ranked}
+            picked = self.pick_by_stamina(ranked, after, limit)
+            if picked is None:
+                self.log_warning(
+                    f"第4周周三：所有科目训练后都 < {limit} 精力 → 今天休息")
+                self._force_rest = True
+                self._force_reason = f"第4周周三：所有科目训练后都 < {limit} 精力"
+                self.exit_page(after_sleep=0.8)
+                return True
+            if picked != name:
+                self.log_info(
+                    f"第4周周三：「{name}」训练后 {after.get(name)} < {limit}"
+                    f" → 改选「{picked}」（{after.get(picked)}）")
+            name = picked
         r = results.get(name) or self.empty_preview()
         # 2026-10-27：这一行必须同时打「金框」和「彩虹」。
         # 代码里彩框会让金框恒为 0（互斥），只打金框时彩框会被统计成「无框」，

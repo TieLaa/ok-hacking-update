@@ -1673,13 +1673,46 @@ class TrainingParsersMixin:
             for ix, iy in icons)
 
     def probe_subject(self, box):
-        """点开一个科目，返回预览信息：队友数 / 装备数 / 满经验数 / 彩虹边框。"""
+        """点开一个科目，返回预览信息：队友数 / 装备数 / 满经验数 / 彩虹边框。
+
+        另外带一个 `after` = 科目页顶栏读到的**训练后精力**（见 `preview_stamina`）。
+        """
         name = (box.name or "").strip()
         self.click_box(box, after_sleep=0.55)
         texts = self._ocr_region()
         self.log_debug(f"场上角色名：{self.scene_names(texts)}")
         self.dump_subject_frame(name, texts)
-        return self.analyze_preview(texts, subject=name)
+        preview = self.analyze_preview(texts, subject=name)
+        preview["after"] = self.preview_stamina(texts)
+        return preview
+
+    def preview_stamina(self, texts):
+        """科目页顶栏的「训练后精力」= 药丸上的数字（用户 2026-11-15 口径）。
+
+        药丸的画法（三个实测帧，2026-11-15）：**黄段画到「当前精力」和「训练后精力」
+        里较小的那个**，两者之间的差额用深橄榄（要扣）或绿色（会涨）补上，
+        再往上是灰色的空余；**数字永远是训练后的值**：
+          - 103/130 选加 4 点的科目 → 黄到 103、绿 4、数字 `107/130`；
+          - 82/130 选扣 18 点的科目 → 黄到 64、深橄榄 18、数字 `64/130`；
+          - 选「意识」（不扣精力）→ `130/130`。
+        所以只读数字，**不要按黄段比例算** —— 黄段是「两者较小值」，两种情况下含义不同。
+        """
+        value = self._stamina_number(self.texts_in_region(texts or [], "top_bar"))
+        if value is not None:
+            return value
+        # 斜杠常被主 OCR 读成数字（`3 1071130`）→ 药丸这一块放大重读一次
+        again = zoom_reread.reread_region(self.frame, self, Defs.region("top_bar"))
+        return self._stamina_number(again)
+
+    @staticmethod
+    def _stamina_number(texts):
+        """OCR 结果里的 `107/130` → 107。兼容 Box 和 `(文字, 置信度)` 两种。"""
+        for t in texts or []:
+            name = t[0] if isinstance(t, tuple) else getattr(t, "name", "")
+            m = labels.STAMINA_RE.search((name or "").replace(" ", ""))
+            if m:
+                return int(m.group(1))
+        return None
 
     def dump_subject_frame(self, subject, texts):
         """把科目预览帧存一份（限流），用于事后校准金框/彩框。
@@ -2161,11 +2194,15 @@ class TrainingParsersMixin:
                 found.append(s)
         return found
 
-    def read_captain_name(self):
-        """底部中间那行队长名字（区域见 Defs.CAPTAIN_NAME_AREA）。"""
+    def read_captain_name(self, texts=None):
+        """底部中间那行队长名字（区域见 Defs.CAPTAIN_NAME_AREA）。
+
+        传 `texts` 就复用本拍已识别的帧（`handle_captain` 第一拍判据），
+        不传才自己再 OCR 一次。
+        """
         x1, y1, x2, y2 = Defs.CAPTAIN_NAME_AREA
         best = None
-        for t in self._ocr_region():
+        for t in (self._ocr_region() if texts is None else texts):
             cx = (t.x + t.width / 2) / self.width
             cy = (t.y + t.height / 2) / self.height
             if not (x1 <= cx <= x2 and y1 <= cy <= y2):

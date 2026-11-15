@@ -20,6 +20,28 @@
 
 ## 以下都是AI自己写的
 
+## 属性优先级
+
+这套规则只回答一个问题：**这一局里，什么属性该优先拿。**
+
+实现集中在 `src/tasks/training/attributes.py`（纯函数，不读帧），训练科目、商店、扭蛋、游戏厅共用它，避免各写一套判断。
+
+### 六维与需求属性
+
+六维：**投射 / 弹跳 / 防守 / 体能 / 运控 / 意识**（唯一来源 `src/tasks/ui/labels.py` 的 `TRAINING_SUBJECTS`）。
+
+**队长打哪个位置，就优先补哪两个属性的短板。** 判定链：`指定队长` → `docs/roster` 里的 `position` → 位置表（`src/tasks/training/attributes.py` 的 `POSITION_TARGETS` / `required_attrs`）。
+
+| 位置 | 需求属性 |
+| --- | --- |
+| 控卫 | 运控 |
+| 分卫 | 运控、防守 |
+| 小前 | 弹跳、运控 |
+| 大前 | 弹跳、防守 |
+| 中锋 | 弹跳、防守 |
+
+细则（缺口排除、1300 减半、各场景的优先级）见 [docs/ATTRIBUTE_PRIORITY.md](docs/ATTRIBUTE_PRIORITY.md)。
+
 ## 扭蛋流周末出行的收支平衡（为什么门槛是 200）
 
 一局 6 周，能进出行地图的次数是固定的：

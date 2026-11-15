@@ -668,9 +668,19 @@ class TalentHandlers:
 
         用户 2026-11-13 口径：**无条件点，不设精力下限**（不做休息阈值判断，
         也别加配置项）。
+
+        例外（2026-11-15 实跑）：钢材为 0 时点「进行施工」只会让游戏在弹窗里
+        显示「建筑材料不足」，界面纹丝不动（连点 67 拍）→ 点右上 ✕ 关掉这页，
+        别再把这一页留给看门狗。
         """
         if self.match_text(texts, labels.CONSTRUCTION_TITLE) is None:
             return False
+        if self.match_text(texts, labels.CONSTRUCTION_NO_MATERIAL) is not None:
+            x = int(self.width * labels.CONSTRUCTION_CLOSE[0])
+            y = int(self.height * labels.CONSTRUCTION_CLOSE[1])
+            self.click(x, y, after_sleep=0.8)
+            self.log_info("工地（建设达人）：没有钢材（建筑材料不足），关掉弹窗继续")
+            return True
         button = self.match_text(texts, labels.CONSTRUCTION_START)
         if button is None:
             return False

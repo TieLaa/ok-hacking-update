@@ -48,7 +48,8 @@
     所以：标题只当**判据**，实际点击永远走选项文字框。
 """
 
-from src.tasks.training.constants import PARK_BOAT_STAMINA, WEEKEND_PICNIC_FALLBACK
+from src.tasks.training.constants import (PARK_BOAT_STAMINA, SHOP_SEASON_WEEKS,
+                                          WEEKEND_PICNIC_FALLBACK)
 from src.tasks.ui import labels
 
 # 地点名（地图上的按钮文字 / 状态里的键）
@@ -103,6 +104,11 @@ class ParkPlace:
         第3周周末例外（用户 2026-11-13）：第4周海边合宿的最后一天是
         全队友训练，前一天体力不够就得休息，所以公园按「离目标还差多少」
         选 —— 差 > 划船 +30 才野餐，否则划船（队友和配置都不抢）。
+
+        2026-11-15 实跑修正：「划船比赛！」只是**添头** —— 实测它只把
+        「推荐属性+20 / 随机属性+10」换成「推荐属性+40」，精力、零用钱、
+        出行次数都不变，所以**不压训练流缺口**（缺口 ≥70 照样野餐：
+        为 10 点属性丢 40 点精力不划算），只在「划船 vs 野餐」摇摆时偏向划船。
         """
         # 第3周周末：海边前要把体力拉回目标，野餐/划船只按缺口选，
         # 队友和配置都不抢（`vacation_eve_target` 不是这一周时返回 None）。
@@ -120,6 +126,12 @@ class ParkPlace:
                     f"海边前周末：体力 {stamina} 距目标 {target} 差 {gap} → 划船")
                 return "划船"
 
+        # 2026-11-15 用户口径（收窄）：最后一周没有训练日了，精力不再兑现 → 划船拿属性。
+        week = self.top_bar(texts).get("week")
+        if week is not None and week >= SHOP_SEASON_WEEKS:
+            self.log_info("公园：最后一周没有训练日，精力不再兑现 → 划船（属性+）")
+            return "划船"
+
         if style == "训练流":
             gap = self.weekend_gap(texts)
             if gap is not None:
@@ -135,6 +147,14 @@ class ParkPlace:
         pick = self.park_default_pick(texts, style, day)
         if pick != "野餐":
             return pick
+        # 2026-11-15 实跑修正：「划船比赛！」是**添头**，不是改道信号。
+        # 实测（第1周周六 vs 周日两帧）：比赛只把「推荐属性+20/+10」换成「推荐属性+40」，
+        # 精力 +30、零用钱、出行次数与普通划船完全相同 —— 多赚 10 点属性，
+        # 换不回野餐那 40 点精力（缺口 ≥70 时仍按缺口野餐，见上面训练流分支）。
+        # 所以标签只放在「本来就在划船/野餐之间摇摆」的这一层。
+        if self.boat_race_badge(texts):
+            self.log_info("公园：「划船比赛！」添头 → 划船（比普通划船多 +10 属性）")
+            return "划船"
         boat, picnic = self.park_option_boxes(texts)
         if boat is None or picnic is None:
             return pick
@@ -147,6 +167,31 @@ class ParkPlace:
         self.log_info(f"公园：默认野餐 → 划船（队友比野餐多 {diff} 人，按{how}："
                       f"划船 {counts[0]} / 野餐 {counts[1]}）")
         return "划船"
+
+    def boat_race_badge(self, texts):
+        """「划船比赛！」是不是贴在**划船选项正上方**？
+
+        2026-11-15：地图上的公园图标也挂同一个标签，整页子串匹配会在页面
+        误判时把地图当成公园页。所以判据连位置一起判（同 `shop_fresh_badge`）：
+        - 标签中心在划船选项中心正上方（|Δcx| ≤ 0.15，Δcy ∈ [0.005, 0.15]）；
+        - 标签和选项被 OCR 读成一整块（框名本身带「划船比赛」）也算。
+        """
+        boat, _picnic = self.park_option_boxes(texts)
+        if boat is None:
+            return False
+        if "划船比赛" in (boat.name or ""):
+            return True
+        bx = (boat.x + boat.width / 2) / self.width
+        by = (boat.y + boat.height / 2) / self.height
+        for t in texts:
+            name = (t.name or "").strip()
+            if "划船比赛" not in name:
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if abs(cx - bx) <= 0.15 and 0.005 <= (by - cy) <= 0.15:
+                return True
+        return False
 
     def park_default_pick(self, texts, style, day=None):
         """缺口读不到时的旧回退：训练流「周六划船 / 周日看精力」，其它流派用配置项。"""
