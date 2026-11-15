@@ -7,6 +7,7 @@
 import time
 
 from src.tasks.training import params
+from src.tasks.training.handlers.match import new_match_flags
 from src.tasks.training.queue import CaptainQueue
 from src.tasks.ui import labels
 from src.util.emergency_stop import STOP
@@ -486,8 +487,7 @@ class TrainingFlowMixin:
         self._picked_subject = False
         self._picked_index = 0
         self._subject_confirmed_at = 0.0
-        self._match_flags = {"manual_fixed": False, "fast_clicked": False,
-                             "last_fast_at": 0.0}
+        self._match_flags = new_match_flags()
         self._subject_dumps = 0
         self._skill_dumps = 0
         self._stock_dumps = 0
@@ -993,8 +993,8 @@ class TrainingFlowMixin:
         self._wheel_clicked_at = 0.0
         # 今天去过的地点：卡住的很可能就是「记成去过了、其实没进去」
         state = self.day_state()
-        state["visited"] = set()
-        state["current_step"] = None
+        state.visited = set()
+        state.current_step = None
         self.log_info("干预纠错：已清掉当天拦路标记（商店试次/出行/笔记/科目/已去地点）")
 
     def _journal_click(self, record):
@@ -1282,9 +1282,9 @@ class TrainingFlowMixin:
         周二现在没有任何特殊阈值（旧的周二 65 / 周二 60 已删除）。
         有硬阈值时取 max(策略参数, 硬阈值)，参数调高时以参数为准。
         """
-        base = int(params.get("rest.stamina_threshold"))
+        base = int(params.rest.stamina_threshold)
         if day == "四":
-            hard = params.get("rest.thursday_threshold_by_style").get(self.style)
+            hard = params.rest.thursday_threshold_by_style.get(self.style)
             if hard is not None:
                 return max(base, hard)
         return base

@@ -154,24 +154,24 @@ class ParkPlace:
             return self.config.get("公园选项")
 
         st = self.day_state()
-        day = day if day is not None else (st["date"][1] if st["date"] else None)
-        if st.get("park_choice") is None:
+        day = day if day is not None else (st.date[1] if st.date else None)
+        if st.park_choice is None:
             if day == "日":
                 stamina = self.top_bar(texts).get("stamina")
                 # 只在「缺口」读不到时兜底；周末野餐缺口现在表示缺口，
                 # 不能拿它当精力阈值用，所以这里用旧的固定 60。
                 threshold = WEEKEND_PICNIC_FALLBACK
                 if stamina is not None and stamina < threshold:
-                    st["park_choice"] = "野餐"
+                    st.park_choice = "野餐"
                     self.log_info(f"周日精力 {stamina} < {threshold} → 野餐补精力")
                 else:
-                    st["park_choice"] = "划船"
+                    st.park_choice = "划船"
                     self.log_info(f"周日精力 {stamina} ≥ {threshold} → 划船（属性+）")
             else:
-                st["park_choice"] = "划船"
+                st.park_choice = "划船"
                 self.log_info("周六公园：划船（属性+，不再满精力吃野餐）")
 
-        return st["park_choice"]
+        return st.park_choice
 
     def park_option_boxes(self, texts):
         """公园选项里「划船」「野餐」两个文字框 → (划船, 野餐)；找不到的那项是 None。

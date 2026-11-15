@@ -41,6 +41,8 @@ from src.tasks.training.constants import PROJECT_ROOT
 
 LOG_ROOT = os.path.join(PROJECT_ROOT, "logs")
 CLICK_LOG = "clicks.jsonl"
+#: 图片扩展名：清理时只保留/统计这些（原来两个函数各写一份）
+IMAGE_EXTS = (".jpg", ".jpeg", ".png")
 
 #: 局目录名：`1110-091635[_接手][_第N局][_队长]`
 ROUND_RE = re.compile(r"^\d{4}-\d{6}_")
@@ -298,12 +300,13 @@ def legacy_actions(legacy_days, log_dir):
         if not os.path.isdir(base):
             continue
         cutoff = now - keep_days * 86400
-        patterns = ("*.jpg", "*.jpeg", "*.png") if keep_txt else ("*",)
+        patterns = (tuple("*" + ext for ext in IMAGE_EXTS)
+                    if keep_txt else ("*",))
         for pattern in patterns:
             for path in glob.glob(os.path.join(base, pattern)):
                 if not os.path.isfile(path):
                     continue
-                if keep_txt and not path.lower().endswith((".jpg", ".jpeg", ".png")):
+                if keep_txt and not path.lower().endswith(IMAGE_EXTS):
                     continue
                 if _ages(path) >= cutoff:
                     continue
@@ -341,7 +344,7 @@ def cap_actions(planned, max_bytes, log_dir):
     images = []
     for dirpath, _dirs, files in os.walk(log_dir):
         for name in files:
-            if not name.lower().endswith((".jpg", ".jpeg", ".png")):
+            if not name.lower().endswith(IMAGE_EXTS):
                 continue
             path = os.path.join(dirpath, name)
             if path in picked or (picked_dirs and path.startswith(picked_dirs)):

@@ -27,7 +27,7 @@ from src.tasks.training.handlers.popup import PopupHandlers
 from src.tasks.training.handlers.stamina import StaminaHandlers
 from src.tasks.training.handlers.training import TrainingHandlers
 from src.tasks.training.handlers.weekend import WeekendHandlers
-from src.tasks.training.handlers.match import MatchHandlers
+from src.tasks.training.handlers.match import MatchHandlers, new_match_flags
 from src.tasks.training.handlers.entry import EntryHandlers
 from src.tasks.training.handlers.talent import TalentHandlers
 from src.tasks.training.handlers.wheel import WheelHandlers
@@ -69,15 +69,15 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._last_state = None
         self._picked_subject = False
         self._picked_index = 0
-        self._match_flags = {"manual_fixed": False, "fast_clicked": False, "last_fast_at": 0.0}
+        self._match_flags = new_match_flags()
         # 「点了没反应」检测：用户口径 —— 连续点 3 次界面没变化就要开始 debug
         self._recent_actions = deque(maxlen=10)
         self._no_change = 0             # 连续几次点击后界面指纹没变
         self._sig_after_click = None    # 上一次点击后那一帧的指纹
         self._stuck_rounds = 0          # 已经被判定「点不动」的轮数
-        # 周末状态：按「第N周+星期X」区分，跨天自动重置
-        self._weekend = {"date": None, "shop_checked": False, "bought": False,
-                         "park_choice": None}
+        # 当天行程实例（DayState）：按「第N周+星期X」重建，跨天自动重置。
+        # 只放一天最多变一次的值；钱/精力不进来（见 daycycle.DayState）。
+        self._day = None
         # 进店只在「比赛日、进比赛之前」（训练流/商店流各一次）+ 第 7 周以后的
         # 「商店上新」；_shop_day 记当天已经逛过的日期键。
         self._shop_day = None

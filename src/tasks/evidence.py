@@ -50,7 +50,7 @@ LOG_ROOT = retention.LOG_ROOT
 #: 点击流水：全局单文件（跨局），每行带 round 字段
 CLICK_LOG = os.path.join(LOG_ROOT, retention.CLICK_LOG)
 #: 局目录里必然存在的子目录（清理时的安全阀：没有就绝不删）
-ROUND_SUBS = ("events", "unknown", "unmark", "debug")
+ROUND_SUBS = retention.ROUND_SUBS
 #: 局还没开始时的存证落点
 PRE_DIR = "pre"
 

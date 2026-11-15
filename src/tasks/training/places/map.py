@@ -30,6 +30,28 @@ from src.tasks.ui import labels
 # 周末计划的一步：place=地点名，urgent=True=急招临时插队（不是今天的主计划）。
 WeekendStep = namedtuple("WeekendStep", "place urgent")
 
+# 一次地图决策的只读上下文。钱/精力等易变值**不存进 DayState**（2026-11-15
+# 用户口径：实例只放一天最多变一次的值），每次决策从同一份 texts 读一次装这里。
+MapContext = namedtuple(
+    "MapContext",
+    "style money urgent street_discount visited gacha_spent "
+    "final_outing discount_worth places")
+
+# 一条改道规则：place/urgent = 改道到哪、是不是临时插队；when 读 MapContext。
+Detour = namedtuple("Detour", "place urgent when")
+
+# 地图事件改道规则：**只写会改道的**，没写 = 不改道。
+#   place/urgent = 改道到哪、是不是临时插队
+#   when         = 条件（只读 MapContext，不碰 OCR/状态）
+# 训练流、商店流、扭蛋增强、划船比赛、地狱游戏、每周补助都不在这张表里。
+MAP_DETOURS = (
+    # 急招：主计划不是餐厅时，先去餐厅赚双倍。
+    # 第 7 周周六是最后一次出行 → 不插队（2026-11-14 口径）。
+    Detour("餐厅", True, lambda c: c.urgent and not c.final_outing),
+    # 步行街打折：钱不够 360、但折后够 → 先去消费（错过就是实打实的损失）。
+    Detour("步行街", False, lambda c: c.discount_worth),
+)
+
 
 class MapPlace:
     """周末地图的决策与状态。**不点击**，只给判断。"""
@@ -108,9 +130,9 @@ class MapPlace:
           按周六兜底」隐式拿行程。
         """
         if st is None:
-            st = self.weekend_state()
+            st = self.day_state()
         if day is None:
-            day = (st.get("date") or (None, None))[1]
+            day = (st.date or (None, None))[1]
         # 读不到星期时按周六那一行兜底（商店流还按表走）。
         day = day or "六"
         # 2026-11-14 用户口径（游戏设置，唯一策略）：第 7 周周日不能再出行，
@@ -131,7 +153,7 @@ class MapPlace:
         if main is not None:
             # 买成扭蛋当天就结束，不用再去餐厅（小游戏流由 visited 过滤）。
             places = [main, "餐厅"]
-            if self.style == "扭蛋流" and st.get("gacha_spent"):
+            if self.style == "扭蛋流" and st.gacha_spent:
                 places = [main]
         else:
             places = list(WEEKEND_PLAN.get((day, self.style))
@@ -192,15 +214,13 @@ class MapPlace:
         先看零用钱，队友和星期都无关 ——
           - 读不到 → 主地点（不拿打工赌今天的消费）；
           - < `weekend.work_money_gate`（360）→ **只去餐厅打工**；
-            例外（2026-11-14 用户口径）：**扭蛋流**遇到步行街名字左侧
-            「打折！」且零用钱 ≥ `weekend.discount_money_gate`（180）→
-            改去步行街。折后门槛 = 360 的一半，错过打折是实打实的损失。
-            游戏厅/餐厅的「打折」标签不适用；小游戏流本次不改。
           - ≥ 360 → 主地点。
+        事件改道（步行街打折 / 餐厅急招）**不在这里**，统一走
+        `event_detour`（2026-11-15 收口）：这里只算「钱够不够」的基准。
         理由（一次步行街期望 3.3 颗、4 颗金 = 360 覆盖 78% 的触发轮次）见
         `strategy/params.json` 的 `weekend._doc`。2026-11-13 试过 200，
         但折扣不是每次发生，没折扣时只够买 2 颗，已回滚 360。
-        现在的 180 只在**地图确认今天打折**时生效，不是无条件降门槛。
+        180 只在**地图确认今天打折**时由事件层生效，不是无条件降门槛。
 
         **训练流**（2026-11-11 起）**不再经过这里**：缺口 < 30 固定去餐厅打工，
         候选里已经没有步行街/游戏厅。下面这条「只有一边打折就先去那边」
@@ -225,8 +245,7 @@ class MapPlace:
                 return places
             money = self.read_money(texts)
             week, _ = self.current_day()
-            gate = int(params.get("weekend.work_money_gate"))
-            discount_gate = int(params.get("weekend.discount_money_gate"))
+            gate = int(params.weekend.work_money_gate)
             # 2026-11-14 用户口径（游戏设置）：第 7 周周六是最后一次出行，
             # **不看零花钱**直接去主地点；没消费再退出回餐厅打工（下一站）。
             if day == "六" and week == SHOP_SEASON_WEEKS:
@@ -237,18 +256,6 @@ class MapPlace:
             if money is None:
                 self.log_info(f"周末地点：零用钱读不到 → 去「{main}」")
             elif money < gate:
-                # 2026-11-14 用户口径：钱不够 360 时，如果**步行街自己**在打折，
-                # 折后能买完，错过就是实打实的损失 → 改去步行街。
-                # 只认扭蛋流 + 步行街名字左侧的「打折」；游戏厅/餐厅的标签不改道。
-                if (self.style == "扭蛋流"
-                        and money >= discount_gate
-                        and self.venue_on_discount(
-                            texts, self._venue_box(texts, "步行街"))):
-                    self.log_info(
-                        f"周末地点：零用钱 {money} < {gate}"
-                        f"，但步行街打折（折后门槛 {discount_gate}）"
-                        f" → 去「步行街」消费")
-                    return [main] + [p for p in places if p != main]
                 self.log_info(
                     f"周末地点：零用钱 {money} < {gate}"
                     " → 只去「餐厅」打工")
@@ -291,13 +298,16 @@ class MapPlace:
         用户 2026-11-13 口径：
         - 原计划首选就是餐厅 → urgent=False，急招卡不可选时可改打桌游GM；
         - 急招插队 → urgent=True，急招卡不可选时退出，回原计划。
+
+        2026-11-15：急招/打折从本方法里抽出来，统一走 `event_detour`；
+        这里只算「基准计划」，顺序固定为 基准 → 事件 → 海边守卫。
         """
         if st is None:
-            st = self.weekend_state()
+            st = self.day_state()
         if day is None:
-            day = (st.get("date") or (None, None))[1]
-        visited = st.get("visited") or set()
-        tried = st.get("gacha_tried") or set()
+            day = (st.date or (None, None))[1]
+        visited = st.visited
+        tried = st.gacha_tried
 
         # 先按原逻辑过滤「今天已经去过/试过」的地点，再算主计划。
         places = self.today_places(day, st, texts)
@@ -305,20 +315,78 @@ class MapPlace:
         if "步行街" in tried:
             places = [p for p in places if p != "步行街"]
         main = self.prefer_venue(texts, places, day)
-        if not main:
-            steps = []
-        elif main[0] == "餐厅":
-            # 主计划首选就是餐厅 → 不是 detour（商店流 / 钱不够 / 训练流缺口小）。
-            steps = [WeekendStep(p, False) for p in main]
-        elif (not self.venue_has_urgent(texts, "餐厅")
-              or "餐厅" in visited
-              or (self.style == "扭蛋流" and st.get("gacha_spent"))):
-            steps = [WeekendStep(p, False) for p in main]
-        else:
-            self.log_info(f"周末：餐厅有「急招！」→ 插到最前（原首选 {main[0]}）")
-            steps = ([WeekendStep("餐厅", True)]
-                     + [WeekendStep(p, False) for p in main if p != "餐厅"])
+        steps = [WeekendStep(p, False) for p in main]
+        steps = self.event_detour(st, texts, steps, places)
         return self.vacation_eve_guard(steps, texts, st)
+
+    # ---------- 事件层：地图标签 → 要不要改道 ----------
+
+    def map_context(self, st, texts, places):
+        """一次决策的只读上下文；钱/精力只读一次，不写回 `DayState`。
+
+        为什么不把 money 存进实例（2026-11-15 用户口径）：它每拍都可能变，
+        存进去就要跟着 OCR 校准、还要把每个扣减点接进来，架构更重。
+        """
+        money = self.read_money(texts)
+        work_gate = int(params.weekend.work_money_gate)
+        discount_gate = int(params.weekend.discount_money_gate)
+        street_discount = bool(
+            self.venue_on_discount(texts, self._venue_box(texts, "步行街")))
+        week, day = st.date or (None, None)
+        return MapContext(
+            style=st.style,
+            money=money,
+            urgent=self.venue_has_urgent(texts, "餐厅"),
+            street_discount=street_discount,
+            visited=st.visited,
+            gacha_spent=st.gacha_spent,
+            # 第 7 周周六是最后一次出行：事件不许插队
+            final_outing=(week == SHOP_SEASON_WEEKS and day == "六"),
+            # 扭蛋流 + 步行街自己的「打折」+ 钱在折后门槛到原门槛之间
+            discount_worth=(st.style == "扭蛋流" and street_discount
+                            and money is not None
+                            and discount_gate <= money < work_gate),
+            places=tuple(places),
+        )
+
+    @staticmethod
+    def _detour_hits(rule, ctx, steps):
+        """这条规则今天成立吗？守卫都在这里，规则本身只写条件。
+
+        - `urgent=True`（急招）是**插队**：目标可以在今天的候选之外
+          （训练流缺公园也能先去餐厅），只要求没去过；
+        - `urgent=False`（打折）是**替首选**：目标必须在今天的候选里，
+          否则「改去步行街」会让当天计划凭空多出一个没规划的地点。
+        """
+        if not steps or steps[0].place == rule.place:
+            return False
+        if rule.place in ctx.visited:
+            return False
+        if not rule.urgent and rule.place not in ctx.places:
+            return False
+        # 扭蛋流今天已经买到扭蛋 → 不再去餐厅打工
+        if rule.place == "餐厅" and ctx.style == "扭蛋流" and ctx.gacha_spent:
+            return False
+        return bool(rule.when(ctx))
+
+    def event_detour(self, st, texts, steps, places):
+        """地图事件改道：只处理 `MAP_DETOURS` 里写了的规则。
+
+        没写的标签（扭蛋增强 / 划船比赛 / 地狱游戏 / 每周补助）**默认不改道**，
+        所以不需要在表里写一堆 False。规则按顺序试，第一条命中就返回。
+        """
+        if not steps:
+            return steps
+        ctx = self.map_context(st, texts, places)
+        for rule in MAP_DETOURS:
+            if not self._detour_hits(rule, ctx, steps):
+                continue
+            why = "急招" if rule.urgent else "打折"
+            self.log_info(
+                f"周末：{why} → 改去「{rule.place}」（原首选 {steps[0].place}）")
+            return ([WeekendStep(rule.place, rule.urgent)]
+                    + [s for s in steps if s.place != rule.place])
+        return steps
 
     # ---------- 海边前周末：把体力拉回目标（第3周） ----------
 
@@ -330,11 +398,11 @@ class MapPlace:
         所以第3周周日结束时必须 ≥ 目标值（`strategy/params.json`）。
         """
         if st is None:
-            st = self.weekend_state()
-        week, day = st.get("date") or (None, None)
+            st = self.day_state()
+        week, day = st.date or (None, None)
         if week != 3 or day not in ("六", "日"):
             return None
-        return int(params.get("vacation.stamina_target"))
+        return int(params.vacation.stamina_target)
 
     def vacation_eve_guard(self, steps, texts, st=None):
         """第3周周末：体力不够时把打工换成公园，保证周日结束 ≥ 目标。
@@ -356,11 +424,11 @@ class MapPlace:
         if not steps:
             return steps
         if st is None:
-            st = self.weekend_state()
+            st = self.day_state()
         target = self.vacation_eve_target(st)
         if target is None:
             return steps
-        day = st["date"][1]
+        day = st.date[1]
         stamina = self.top_bar(texts).get("stamina")
         if stamina is None:
             self.log_info("海边前周末：读不到体力 → 今天只去公园")
@@ -394,7 +462,7 @@ class MapPlace:
 
     def vacation_eve_park(self, st):
         """今天只去公园；公园今天已经去过就返回空计划（当天结束）。"""
-        if "公园" in (st.get("visited") or set()):
+        if "公园" in st.visited:
             return []
         return [WeekendStep("公园", False)]
 

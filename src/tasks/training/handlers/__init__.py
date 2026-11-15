@@ -12,7 +12,7 @@ from .popup import PopupHandlers
 from .stamina import StaminaHandlers
 from .training import TrainingHandlers
 from .weekend import WeekendHandlers
-from .match import MatchHandlers
+from .match import MatchHandlers, new_match_flags
 from .entry import EntryHandlers
 from .talent import TalentHandlers
 from .wheel import WheelHandlers
@@ -168,8 +168,7 @@ LEAVE_RESETS = {
     "handle_prepare": {"_skip_tries": 0},
     # 比赛内的「手动修正/快进」标记：离开比赛界面就清空
     "handle_in_match": {
-        "_match_flags": lambda: {"manual_fixed": False, "fast_clicked": False,
-                                 "last_fast_at": 0.0},
+        "_match_flags": new_match_flags,
     },
     # 训练科目页的选择缓存：离开科目页就清空
     "handle_subject_select": {"_picked_subject": False, "_picked_index": 0,

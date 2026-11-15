@@ -8,6 +8,7 @@ import re
 
 from src.tasks.training import params
 from src.tasks.training.attributes import REQUIRED_BONUS
+from src.tasks.ui import labels
 
 
 class TrainingScoringMixin:
@@ -18,7 +19,7 @@ class TrainingScoringMixin:
     # （按卡上的金框算会和「装备」重复计分）。
     @classmethod
     def _weights(cls):
-        return params.get("scoring")
+        return params.scoring
 
     @classmethod
     def empty_preview(cls):
@@ -66,8 +67,9 @@ class TrainingScoringMixin:
                                                -c["mates"], -c["box"].x))
         return ordered[0], ordered
 
-    # 六维属性名：用来把「全属性+5」换算成真实的属性总量
-    ATTR_NAMES = ("投射", "弹跳", "运控", "体能", "防守", "意识")
+    # 六维属性名：用来把「全属性+5」换算成真实的属性总量。
+    # 与训练科目按钮同一批名字；这里只做集合运算，顺序无意义。
+    ATTR_NAMES = labels.TRAINING_SUBJECTS
 
     # 精力**不参与属性分**（2026-11-03 口径修正）。
     # 之前 `STAMINA_WEIGHT = 0.2` 把精力折算成属性点加进同一个 ev：

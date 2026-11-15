@@ -39,8 +39,10 @@ ATTR_ICON_DIR = os.path.join("assets", "ui", "attrs")
 # （ok/ui/qt/qss/dark/stop.svg，白填充 = 主色按钮上的颜色），复制到本地 assets，
 # 不再 import `ok.ui.qt.common.OKIcon`（ok-script 3.0 会删掉那个模块）。
 STOP_ICON = os.path.join("assets", "ui", "stop.svg")
-# 和游戏底部属性面板一致：三行两列，顺序不能改
-DEFAULT_ATTRS = ("投射", "弹跳", "运控", "体能", "防守", "意识")
+# 和游戏底部属性面板一致：三行两列，顺序不能改。
+# 注意：这是**显示布局**，不是训练科目按钮的读字顺序（labels.TRAINING_SUBJECTS）。
+# 两套顺序不同，别合并 —— 合并会让监控页的格子错位。
+ATTR_PANEL_ORDER = ("投射", "弹跳", "运控", "体能", "防守", "意识")
 
 
 class MonitorActions:
@@ -530,7 +532,7 @@ class MonitorView(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(22)
         grid.setVerticalSpacing(4)
-        for idx, name in enumerate(spec.get("attrs") or DEFAULT_ATTRS):
+        for idx, name in enumerate(spec.get("attrs") or ATTR_PANEL_ORDER):
             cell = QHBoxLayout()
             cell.setSpacing(6)
             icon = self._attr_icon(name)

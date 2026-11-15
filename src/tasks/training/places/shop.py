@@ -38,6 +38,26 @@ from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK,
                                           SHOP_STAMINA_ITEMS,
                                           SHOP_STAMINA_UNKNOWN_ASSUME,
                                           SHOP_TRAINING_WEEKDAYS)
+from typing import NamedTuple
+
+
+class ShopRank(NamedTuple):
+    """商店排序键：**字段顺序就是优先级**，改顺序等于改行为（19 条基线用例兜底）。
+
+    2026-11-15 从匿名 10 元组提出来：原来全靠数位置，加一维就得改下标。
+    """
+
+    group: int
+    quality: int
+    paid: int
+    slot: int
+    attr_sub: int
+    unknown: int
+    target_penalty: int
+    neg_value: float
+    price: int
+    y: int
+    item: dict
 
 # 星期 → 数字（用来算剩余训练日）
 WEEKDAY_INDEX = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
@@ -587,14 +607,15 @@ class ShopPlace:
                         continue
                     if cur >= soft_cap:
                         value *= 0.5
-            ranked.append((group, quality, 0 if i["price"] == 0 else 1, slot,
-                           attr_sub,
-                           0 if self.shop_known(i["name"]) else 1,
-                           self._target_penalty(i),
-                           -value, i["price"], i["y"], i))
+            ranked.append(ShopRank(
+                group, quality, 0 if i["price"] == 0 else 1, slot,
+                attr_sub,
+                0 if self.shop_known(i["name"]) else 1,
+                self._target_penalty(i),
+                -value, i["price"], i["y"], i))
         if not ranked:
             return None, "当前流派不买这些商品"
         ranked.sort(key=lambda r: r[:10])
-        pick = ranked[0][10]
+        pick = ranked[0].item
         return pick, "按顺序购买（%s/%s）" % (
             pick.get("quality"), self.item_category(pick))

@@ -314,7 +314,7 @@ class EntryHandlers:
         position = info.get("position") or ""
         if rarity in ("SSR", "SR", "R"):
             self._click_filter_text(texts, rarity)
-        if position in ("控卫", "分卫", "小前", "大前", "中锋"):
+        if position in labels.POSITION_NAMES:
             self._click_filter_text(texts, position)
         else:
             self.log_warning(

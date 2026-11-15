@@ -27,6 +27,8 @@
     tools/check_handlers.py       ← 门禁（默认值只许写在这里）
 """
 
+from src.tasks.ui import labels
+
 # 配置项类型（对齐 ok-script 的 config_type）
 BOOL = "bool"
 INT = "int"
@@ -124,7 +126,7 @@ GACHA = [
 MATCH = [
     Spec("比赛日处理", "自动（先跳过，跳不了就进比赛加速）", DROP,
          "没打赢过的比赛不能跳过，只能进比赛后点左下角快进",
-         options=["自动（先跳过，跳不了就进比赛加速）", "总是跳过", "总是进比赛（外部战斗脚本）"]),
+         options=list(labels.MATCH_DAY_OPTIONS)),
     Spec("技能标签优先", ["得分手"], LIST, "比赛内三选一：优先带这些标签的技能"),
     Spec("技能-彩色", 1, INT,
          "监控页「分数预测」用：技能品质数量（彩/金/白），这里填**开局自带**的数量，"

@@ -6,8 +6,8 @@
     L1 策略参数   src/tasks/training/strategy/params.json（本模块读）
     L2 用户配置   configs/TrainingTask.json（config_spec 声明）
 
-业务代码只调 `get()`；找不到就抛 `KeyError`，不要在调用处写默认值
-——那等于把参数又写回代码。
+业务代码只调 `get()` 或属性式访问（`params.scoring.manager`）；找不到就抛
+`KeyError` / `AttributeError`，不要在调用处写默认值 —— 那等于把参数又写回代码。
 """
 
 import json
@@ -49,3 +49,44 @@ def get(path, default=_MISSING):
             raise KeyError("strategy param not found: %s" % path)
         node = node[part]
     return node
+
+
+class _Node:
+    """属性式访问的中间节点：`params.rest.stamina_threshold`。
+
+    为什么要有：点分字符串在调用处看不见键名，agent 改代码时容易再写一个
+    同义常量；属性式访问能被 IDE/补全提示出来（2026-11-15）。
+    """
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data):
+        self._data = data
+
+    def __getattr__(self, key):
+        if key.startswith("_"):
+            raise AttributeError(key)
+        try:
+            value = self._data[key]
+        except KeyError:
+            raise AttributeError("strategy param not found: %s" % key)
+        return _Node(value) if isinstance(value, dict) else value
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def get(self, key, default=None):
+        value = self._data.get(key, default)
+        return _Node(value) if isinstance(value, dict) else value
+
+
+def __getattr__(name):
+    """模块级属性访问：`params.scoring.manager`（键不存在时 AttributeError）。"""
+    if name.startswith("_"):
+        raise AttributeError(name)
+    _load()
+    try:
+        value = _params[name]
+    except KeyError:
+        raise AttributeError("strategy param not found: %s" % name)
+    return _Node(value) if isinstance(value, dict) else value

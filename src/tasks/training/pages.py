@@ -145,8 +145,7 @@ def _is_stage_list(task, texts):
     这一页只有「下一步」和学校名，没有「结算/赛程」这种整词标题，
     旧判据认不出来会被事件 handler 当成竖排选项。
     """
-    return task.match_text(texts, ("赛程已完成", "距离下场比赛",
-                                   "挑战中")) is not None
+    return task.match_text(texts, labels.STAGE_LIST_MARKS) is not None
 
 
 def _is_confirm_team(task, texts):
@@ -366,6 +365,10 @@ def _is_training_subject(task, texts):
     return False
 
 
+# 比赛结算页的统计表头：同一函数里两个分支共用，出现 >=2 个才算结算页。
+BOX_STATS = ("得分", "篮板", "助攻", "盖帽", "抢断")
+
+
 def _is_match_result(task, texts):
     """比赛结算页：比分大字 + 统计表头 + 奖励弹层。
 
@@ -398,10 +401,10 @@ def _is_match_result(task, texts):
         # 这两处都只有「获得奖励」，没有比分 → 不能算比赛结算页。
         if task.match_text(texts, "战胜") is not None:
             return True
-        stats = [w for w in ("得分", "篮板", "助攻", "盖帽", "抢断")
+        stats = [w for w in BOX_STATS
                  if task.match_text(texts, w) is not None]
         return len(stats) >= 2
-    stats = [w for w in ("得分", "篮板", "助攻", "盖帽", "抢断")
+    stats = [w for w in BOX_STATS
              if task.match_text(texts, w) is not None]
     return len(stats) >= 2
 

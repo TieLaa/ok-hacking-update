@@ -13,7 +13,10 @@
 - 本模块不读帧、不碰 self —— 单测可以脱离游戏跑。
 """
 
-SUBJECTS = ("投射", "弹跳", "防守", "体能", "运控", "意识")
+from src.tasks.ui import labels
+
+# 六维科目名的唯一来源在 labels（那是「界面上的文字」的家）。
+# 监控页的显示顺序不一样（`monitor_view.ATTR_PANEL_ORDER`），别合并。
 
 # 位置 → 需求属性（用户 2026-11-13 确认；来源：多篇攻略交叉，见 docs/RULES.md）
 POSITION_TARGETS = {
@@ -63,7 +66,7 @@ def item_attr_target(name):
         return "PREFERRED"
     if is_money_card(name):
         return "CASH"
-    for attr in SUBJECTS:
+    for attr in labels.TRAINING_SUBJECTS:
         if attr in name:
             return attr
     return None

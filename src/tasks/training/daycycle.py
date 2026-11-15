@@ -16,9 +16,13 @@
 为什么不能各模块自己读顶栏（2026-11-01 的真实 bug）：
 
     `top_bar()` 会被 20 多个地方调用，而同一帧里 OCR 可能读到不同的值。
-    `weekend_state()` 原来按「日期键变了就重建整个状态」，
+    `day_state()` 原来按「日期键变了就重建整个状态」，
     于是顶栏抖一帧 → `visited` / `gacha_spent` 全被清空 →
     当天「已经买过扭蛋」的事实丢了，又要去餐厅打工一次。
+
+2026-11-15：当天状态收进 `DayState` 实例，只放**一天最多变一次**的值
+（去过哪、试过没、当前步骤…）。钱/精力每拍都在变，不存进实例，
+决策时从同一份 `texts` 现读 —— 避免为了校准再长出一套资源账本。
 
 所以本模块提供**唯一的**日期读取入口，并且**每帧只读一次**。
 """
@@ -30,11 +34,53 @@ from src.tasks.training.constants import (SHOP_ENTRY_TRIES,
                                           SHOP_SEASON_WEEKS)
 
 
+class DayState:
+    """一天的行程状态：只放**一天最多变一次**的值（2026-11-15 用户口径）。
+
+    为什么不放零花钱/精力：它们每拍都可能变，存进实例就得跟着 OCR 校准，
+    扣减点也要逐个接，架构反而更重。钱/精力由决策当场从 `texts` 读一次。
+
+    生命周期：日期键（第N周+星期X）一变就换新实例；顶栏读不到时沿用旧实例。
+    """
+
+    __slots__ = ("date", "style", "visited", "gacha_tried", "gacha_spent",
+                 "outing_done", "current_step", "blocked", "shop_checked",
+                 "bought", "park_choice", "gacha_mate")
+
+    def __init__(self, date, style):
+        self.date = date
+        self.style = style
+        self.visited = set()
+        # 今天在步行街**试过**抽扭蛋（买没买成都算）；地图按它排除步行街，
+        # 防止「买不到 → 又点进去」的无限循环。
+        self.gacha_tried = set()
+        # 今天在步行街抽到过扭蛋（扭蛋流决定要不要再去餐厅打工）
+        self.gacha_spent = False
+        # 训练日里出现「出行」时先外出（野上泷周五也能出行），一天只做一次
+        self.outing_done = False
+        # 地图上刚点的这一步（WeekendStep）：place + urgent。
+        # 餐厅 handler 靠 urgent 区分「主计划」和「急招临时插队」。
+        self.current_step = None
+        # 今天已经证实点不动的打工选项 / 地点
+        self.blocked = set()
+        self.shop_checked = False
+        self.bought = False
+        self.park_choice = None
+        # 今天扭蛋卡上出现过队友的名字（读不到 mate 的卡按它补 True）
+        self.gacha_mate = set()
+
+    def __repr__(self):
+        return (f"DayState(date={self.date}, style={self.style!r}, "
+                f"visited={sorted(self.visited)}, "
+                f"gacha_spent={self.gacha_spent}, "
+                f"outing_done={self.outing_done})")
+
+
 class DayCycleMixin:
     """全局日期 + 一天的周期状态。
 
     状态（按「第N周 + 星期X」重置）都挂在这里，别的模块通过
-    `day_state()` 拿，**不直接碰** `self._weekend`。
+    `day_state()` 拿，**不直接碰** `self._day`。
     """
 
     # ---------- 全局日期（每帧只读一次） ----------
@@ -69,63 +115,49 @@ class DayCycleMixin:
     # ---------- 一天的状态（按日期键重置） ----------
 
     def day_state(self):
-        """今天的共享状态（`visited` / `gacha_spent` / `outing_done` …）。
+        """今天的行程实例（`visited` / `gacha_spent` / `current_step` …）。
 
         **重置的唯一触发条件是日期变了** —— 因为游戏里交互就过天，
         所以「日期没变」=「还在同一天」= 状态不该变。
 
-        2026-11-01 修：原来只要 key 变了就整个重建，顶栏 OCR 抖一帧
-        （扭蛋页只读到专注、没读到「第1周 星期五」）就会把当天状态清空。
-        现在读不到完整日期键时**沿用旧状态**。
+        顶栏 OCR 抖一帧（扭蛋页只读到专注、没读到「第1周 星期五」）时
+        **沿用旧实例**，不能当成新的一天（2026-11-01 的 bug：visited 被清空，
+        当天又去餐厅打了一次工）。
         """
         week, day = self.current_day()
-        prev = self._weekend.get("date")
+        prev = getattr(self, "_day", None)
         if week is None or day is None:
-            # 顶栏 OCR 抖动，不是「换了一天」→ 沿用旧状态
+            # 顶栏 OCR 抖动，不是「换了一天」→ 沿用旧实例
             if prev is not None:
-                self.log_debug(f"顶栏没读到周/星期（{week}/{day}）→ 沿用 {prev} 的当天状态")
-            self._ensure_day_state_keys()
-            return self._weekend
+                self.log_debug(
+                    f"顶栏没读到周/星期（{week}/{day}）→ 沿用 {prev.date} 的当天状态")
+                return self._sync_day_style(prev)
+            # 第一次调用就读不到日期：先建一个没有日期的实例，
+            # 之后读到日期会按 key 重建。
+            self._day = DayState(None, self.style)
+            return self._day
         key = (week, day)
-        if prev != key:
+        if prev is None or prev.date != key:
             if prev is not None:
-                self.log_info(f"日期键 {prev} → {key}（新的一天，今日行程重置）")
-            self._weekend = self._new_day_state(key)
-        return self._weekend
+                self.log_info(f"日期键 {prev.date} → {key}（新的一天，今日行程重置）")
+            self._day = DayState(key, self.style)
+        return self._sync_day_style(self._day)
 
-    @staticmethod
-    def _new_day_state(key):
-        """新的一天的状态。"""
-        return {
-            "date": key,
-            "shop_checked": False,
-            "bought": False,
-            "park_choice": None,
-            "visited": set(),
-            # 今天在步行街**试过**抽扭蛋（买没买成都算试过）。
-            # 地图上按它排除步行街，防止「买不到 → 又点进去」的无限循环。
-            "gacha_tried": set(),
-            # 今天在步行街抽到过扭蛋（扭蛋流决定要不要再去餐厅打工）
-            "gacha_spent": False,
-            # 训练日里出现「出行」时先外出（野上泷周五也能出行），一天只做一次
-            "outing_done": False,
-            # 地图上刚点的这一步（WeekendStep）：place + urgent。
-            # 餐厅 handler 靠 urgent 区分「主计划」和「急招临时插队」。
-            "current_step": None,
-        }
+    def _sync_day_style(self, st):
+        """快速接手时流派可能当天才识别出来：实例里的 style 跟着当前值走。"""
+        if st.style != self.style:
+            st.style = self.style
+        return st
 
-    def _ensure_day_state_keys(self):
-        """补齐 `_weekend` 里缺的键。
+    def _ensure_day(self):
+        """直接拿当天的实例，不触发顶栏日期判断（内页读不到顶栏时用）。
 
-        2026-11-01：`_weekend` 初始值只有 4 个键（TrainingTask.__init__），
-        其它键要等重建时才补上。顶栏读不到日期时不重建 → 那些键就永远缺，
-        `task._weekend["visited"]` 会 KeyError。
+        2026-10-26：`mark_visited` 在地点内页登记；内页顶栏可能被裁掉，
+        不能因为读不到日期就重建实例、把 visited 清空。
         """
-        defaults = self._new_day_state(self._weekend.get("date"))
-        for k, v in defaults.items():
-            if k not in self._weekend:
-                self._weekend[k] = v
-        return self._weekend
+        if getattr(self, "_day", None) is None:
+            self._day = DayState(None, self.style)
+        return self._sync_day_style(self._day)
 
     # ---------- 一天的入口 ①：训练日主界面 ----------
 
@@ -452,7 +484,7 @@ class DayCycleMixin:
 
     def outing_used(self):
         """今天的额外出行机会用过了吗？"""
-        return bool(self.day_state().get("outing_done"))
+        return bool(self.day_state().outing_done)
 
     def mark_outing_used(self):
         """标记今天的额外出行机会已用。
@@ -463,5 +495,5 @@ class DayCycleMixin:
         `handle_go_out` 对非周末的 `outing_done` 是直接 `exit_page()`。
         改成「进门才算」以后，点空了下一拍还能重试。
         """
-        self.day_state()["outing_done"] = True
+        self.day_state().outing_done = True
 

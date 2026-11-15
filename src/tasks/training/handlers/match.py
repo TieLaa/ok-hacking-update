@@ -15,6 +15,16 @@ from src.tasks.training import page_signatures
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
 
+
+def new_match_flags():
+    """比赛内「手动修正 / 快进」标记的初始值。
+
+    三处默认值（训练任务初始化、跨天重置、离开比赛界面重置）共用这一个工厂。
+    之前是三份字典字面量，改一处忘另一处就会让某个入口读到旧结构（2026-11-15 收敛）。
+    """
+    return {"manual_fixed": False, "fast_clicked": False, "last_fast_at": 0.0}
+
+
 class MatchHandlers:
 
     # --- 左下角 ▶▶ 快进按钮的像素判据（见 Defs.MATCH_FF_ROI）---
@@ -166,7 +176,7 @@ class MatchHandlers:
             return False
         # 锦标赛对阵图：只有「赛程已完成 / 距离下场比赛 / 下一场」和学校名，
         # 没有「结算/赛程」这种整词标题，旧判据认不出来会被事件 handler 当成竖排选项。
-        if self.match_text(texts, ("赛程已完成", "距离下场比赛", "挑战中")) is not None:
+        if self.match_text(texts, labels.STAGE_LIST_MARKS) is not None:
             nxt = self.match_text(texts, "下一步")
             if nxt is None:
                 nxt = self.match_text(texts, "下一场")

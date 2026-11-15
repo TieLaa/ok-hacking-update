@@ -84,12 +84,21 @@ class RestaurantPlace:
         counts, how = self.card_mate_counts(found)
         ranked, why = self.restaurant_preference(found, counts)
         urgent = self.restaurant_urgent_card(texts, found)
-        if urgent is not None:
+        if not allow_fallback:
+            # 插队趟（因地图急招才进餐厅）：**只认急招卡**。
+            # 认不出 → ranked 为空，走下面「没有可选的卡」统一退出；
+            # 认得出但不可选 → usable 为空，走下面「急招卡不可选」统一退出。
+            ranked = [urgent] if urgent is not None else []
+            why = (f"急招！{urgent.name.strip()}双倍" if urgent is not None
+                   else "急招插队，但没认出急招卡")
+        elif urgent is not None:
+            # 主计划趟（本来就要来餐厅）：急招优先；吃不到就按原顺序改选另一张。
             ranked = [urgent] + [b for b in ranked if b is not urgent]
             why = f"急招！{urgent.name.strip()}双倍"
         free = [b for b in ranked if b.name.strip() not in blocked]
         if not free:
-            self.log_warning(f"餐厅：{sorted(blocked)} 今天都点不动，没有可选的卡")
+            self.log_warning(
+                f"餐厅：没有可选的卡（今天点不动 {sorted(blocked) or '无'}）")
             return ()
         usable = [b for b in free
                   if self.option_selectable(

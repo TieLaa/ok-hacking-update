@@ -29,7 +29,11 @@
        另：恢复精力的商品/扭蛋/小游戏在**同等条件**下优先级最低
        （2026-11-07 口径，用户原话「同等条件下，恢复精力的商品/扭蛋/小游戏
        优先级最低」）——比较键里恢复价值排最后就是这个意思；
-    5. 没有合格卡就退出，不点确定。
+    5. **六维「XX暴涨」**（2026-11-15 用户口径）：一次性 +250 该属性，但主力
+       之后不能再从训练中获得该属性。前期买等于封掉一门训练 → **第 7 周
+       （赛季最后一周）之前不买**。名单只列六维（`SURGE_NAMES`），
+       「熟练度暴涨」是器材熟练度、不属于这一类，不要改成泛匹配「暴涨」；
+    6. 没有合格卡就退出，不点确定。
 
 历史事故（都写在这里，避免又被改坏）：
 
@@ -57,9 +61,15 @@
 
 from src.tasks.ui import labels
 from src.tasks.training import attributes
+from src.tasks.training.constants import SHOP_SEASON_WEEKS
 
     # 地点名（地图上的按钮文字 / 状态里的键）
 PLACE = "步行街"
+
+# 「XX暴涨」= 一次性 +250 该属性，但主力之后不能再从训练中获得该属性
+# （2026-11-15 用户口径）。名单只列六维：同名的「熟练度暴涨」是器材熟练度，
+# 不在名单里；运行时**不要**改成泛匹配「暴涨」。
+SURGE_NAMES = tuple(f"{a}暴涨" for a in labels.TRAINING_SUBJECTS)
 
 
 class StreetPlace:
@@ -110,7 +120,8 @@ class StreetPlace:
     # ---------- 买哪张卡（纯判断，不点击） ----------
 
     def gacha_candidates(self, cards, stamina, stamina_max, money,
-                         required=None, attrs=None, caps=None, gap_limit=100):
+                         required=None, attrs=None, caps=None, gap_limit=100,
+                         week=None):
         """三张卡里哪些值得买、买哪张。
 
         返回 (best, detail, all_cards)：
@@ -118,12 +129,14 @@ class StreetPlace:
         - `detail` 是给人看的候选清单（日志用）
         - `all_cards` 是全部三张（不管买不买）
 
-        参数里 `stamina` / `money` 可能是 None（读不到）——
+        参数里 `stamina` / `money` / `week` 可能是 None（读不到）——
         读不到零用钱或价格时**不买**（买不起点「确定」游戏不扣钱、页面也不关，
         旧代码会一直「选卡 → 确定 → 没反应」，2026-10-26 实测）。
+        `week` 读不到时「XX暴涨」按不买处理（买错的代价是封掉一门训练）。
         """
         clear_limit = int(self.config.get("扭蛋清空精力阈值"))
         allow_clear = stamina is not None and stamina < clear_limit
+        surge_late = week is not None and week >= SHOP_SEASON_WEEKS
         required = set(required or ())
         attrs = attrs or {}
         caps = caps or {}
@@ -202,6 +215,11 @@ class StreetPlace:
             # （日志：`体能增加(蓝/50币/0)、精力转换-体能(蓝+队友·清空/50币/0)、
             #   全属性增加(蓝/50币/0) → 选「精力转换-体能」`）。
             if c["quality"] not in base_of:
+                continue
+            # 六维「XX暴涨」：第 7 周（赛季最后一周）之前不买（2026-11-15 用户口径）。
+            # 周数读不到（week=None）按不买：买错的代价是封掉一门训练。
+            if not surge_late and any(n in c["name"] for n in SURGE_NAMES):
+                c["reject"] = "属性暴涨卡（第7周后才买）"
                 continue
             # 清空卡额外一道门槛：只有精力低于阈值时才买（这时是拿精力换属性）
             if c["clear"] and not allow_clear:
@@ -356,8 +374,8 @@ class StreetPlace:
 
     def mark_tried(self):
         """今天试过抽扭蛋了（进过页面就算）。"""
-        self.street_state().setdefault("gacha_tried", set()).add(PLACE)
+        self.street_state().gacha_tried.add(PLACE)
 
     def mark_spent(self):
         """今天买成了（点「确定」成功才算）。"""
-        self.street_state()["gacha_spent"] = True
+        self.street_state().gacha_spent = True

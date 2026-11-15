@@ -94,10 +94,10 @@ class WeekendHandlers:
     def blocked_activities(self):
         """今天已经证实点不动的打工选项。
 
-        挂在 `_weekend` 上：跟着「第N周 + 星期X」一起重置（`day_state()`），
+        挂在当天实例上：跟着「第N周 + 星期X」一起重置（`day_state()`），
         不落盘、不跨天。
         """
-        return self._weekend.setdefault("blocked", set())
+        return self._ensure_day().blocked
 
     # 地点详情弹窗右上角的 ×：2026-10-31 实测（餐厅 / 1549x871）在 (0.87w, 0.19h)。
     # 图上就是一个叉，OCR 读不到，所以先试文字、再按坐标兜底。
@@ -125,12 +125,12 @@ class WeekendHandlers:
         但旧代码点击前就 `visited.add(place)`，结果整天的公园都被跳过。
         现在只在各地点 handler 识别到自己的内页标题时登记。
 
-        这里直接写 `_weekend`，**不**走 `day_state()` —— 后者按顶栏日期判断，
+        这里直接写当天实例，**不**走 `day_state()` —— 后者按顶栏日期判断，
         地点内页如果读不到顶栏会重建整个状态，把 visited 清空。
-        （`day_state()` 现在已经修成「读不到日期就沿用旧状态」，但这里
-        直接写更稳：登记不该依赖「读得到日期」。）
+        （`day_state()` 现在已经修成「读不到日期就沿用旧状态」，但
+        `_ensure_day()` 更稳：登记不该依赖「读得到日期」。）
         """
-        self._weekend.setdefault("visited", set()).add(place)
+        self._ensure_day().visited.add(place)
 
     def leave_street(self, after_sleep=0.5):
         """退出扭蛋页：先找文字退路，再点右上角 ↩。
@@ -164,7 +164,7 @@ class WeekendHandlers:
         if not self.restaurant_page(texts):
             return False
         self.mark_visited("餐厅")
-        step = self._weekend.get("current_step")
+        step = self._ensure_day().current_step
         allow_fallback = not bool(getattr(step, "urgent", False))
         order = self.restaurant_order(texts, allow_fallback=allow_fallback)
         if not order:
@@ -446,7 +446,7 @@ class WeekendHandlers:
         for c in cards:
             if c.get("mate"):
                 if cache is None:
-                    cache = self.day_state().setdefault("gacha_mate", set())
+                    cache = self.day_state().gacha_mate
                 cache.add(c["name"])
         if cache:
             for c in cards:
@@ -576,7 +576,8 @@ class WeekendHandlers:
             required=attributes.required_attrs(info.get("position")),
             attrs=dict(self.info.get("attrs") or {}),
             caps=getattr(self, "_attr_caps", None) or {},
-            gap_limit=int(self.config.get("缺口排除阈值")))
+            gap_limit=int(self.config.get("缺口排除阈值")),
+            week=bar.get("week"))
         if best is None:
             self.log_info(f"扭蛋：{detail} → 没有可买的"
                           f"（零用钱 {money}，精力 {stamina}），退出")
@@ -701,8 +702,8 @@ class WeekendHandlers:
         # （2026-11-03），所以「点了出行但没进地图」时这里还会再点一次，
         # 不会出现「周五点空一次就整天进不去」。
         st = self.day_state()
-        day = st["date"][1] if st["date"] else None
-        if st.get("outing_done") and day not in ("六", "日"):
+        day = st.date[1] if st.date else None
+        if st.outing_done and day not in ("六", "日"):
             self.exit_page()
             self.log_info("训练日的额外出行已经用过 → 返回主界面")
             return True
@@ -777,8 +778,8 @@ class WeekendHandlers:
         # 的 `outing_done` 是直接返回）。放这里同时也保住了「出图 → 回首页 →
         # 再点出行」的打转守卫。
         self.mark_outing_used()
-        visited = st.setdefault("visited", set())
-        day = st["date"][1] if st["date"] else None
+        visited = st.visited
+        day = st.date[1] if st.date else None
 
         # 今天要走的步骤：地图模块算主计划 + 急招 detour。
         # visited / gacha_tried 的过滤已经收进 `weekend_plan`。
@@ -787,7 +788,7 @@ class WeekendHandlers:
             # 地点都去过：停在周末地图上什么都不会发生（2026-10-26 卡死：
             # 地图被 story_arrow 当成剧情页连点 ▼，反复 50 秒）。
             # 点右上角返回周末首页，让当天结算。
-            st["current_step"] = None
+            st.current_step = None
             self.log_info(f"周末：{sorted(visited)} 都去过了 → 返回")
             self.exit_page()
             return True
@@ -810,7 +811,7 @@ class WeekendHandlers:
                 # 不在这里记 visited：要等地点的内页 handler 真认到标题才登记，
                 # 否则「点了没打开」也会被当成去过（2026-10-26 公园没打开就被跳过）。
                 # current_step 让餐厅 handler 知道这趟是主计划还是急招插队。
-                st["current_step"] = step
+                st.current_step = step
                 self.click_box(target, after_sleep=0.5)
                 self.log_info(f"周末点「{place}」（{self.style}）")
                 return True

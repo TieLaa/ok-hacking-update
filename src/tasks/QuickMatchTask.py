@@ -23,6 +23,7 @@ from src.tasks.training.handlers.match import MatchHandlers
 from src.tasks.training.parsers import TrainingParsersMixin
 from src.tasks.training.scoring import TrainingScoringMixin
 from src.tasks.training.systemui import SystemUIHandlers
+from src.tasks.ui import labels
 
 # 常驻任务没有看门狗：判据误命中时会每 0.5 秒点同一处、永远不停
 # （2026-10-27 实机：全中「对手实力」点了 30 秒）。所以这里自己数：
@@ -68,8 +69,7 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
         self.config_type.update({
             "比赛日处理": {
                 "type": "drop_down",
-                "options": ["自动（先跳过，跳不了就进比赛加速）",
-                            "总是跳过", "总是进比赛（外部战斗脚本）"],
+                "options": list(labels.MATCH_DAY_OPTIONS),
             },
         })
         self.config_description.update({
