@@ -56,14 +56,21 @@ jobs:
         run: |
           set -euo pipefail
           cd src
+          # 一次性清理：v0.1.20 首次同步把 docs/roster 掉到了仓库根
+          rm -rf ../dst/roster
           while IFS= read -r line; do
             line="$(printf '%s' "$line" | tr -d '\r')"
             [ -z "$line" ] && continue
             case "$line" in \#*) continue ;; esac
             if [ -e "$line" ]; then
-              mkdir -p "../dst/$(dirname "$line")"
-              cp -a "$line" ../dst/
-              echo "copied: $line"
+              # 不用 dirname：v0.1.20 首次同步时目标目录算错，docs/roster 掉到了仓库根
+              case "$line" in
+                */*) dest="../dst/${line%%/*}" ;;
+                *)   dest="../dst" ;;
+              esac
+              mkdir -p "$dest"
+              cp -a "$line" "$dest/"
+              echo "copied: $line -> $dest/"
             else
               echo "skip (source 里没有): $line"
             fi
