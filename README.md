@@ -31,7 +31,7 @@
 六维：**投射 / 弹跳 / 防守 / 体能 / 运控 / 意识**（唯一来源 `src/tasks/ui/labels.py` 的 `TRAINING_SUBJECTS`）。
 
 **队长打哪个位置，就优先补哪两个属性的短板。** 判定链：`指定队长` → `docs/roster` 里的 `position` → 位置表（`src/tasks/training/attributes.py` 的 `POSITION_TARGETS` / `required_attrs`）。
-
+此规则来源网络攻略，非本人实践。
 | 位置 | 需求属性 |
 | --- | --- |
 | 控卫 | 运控 |

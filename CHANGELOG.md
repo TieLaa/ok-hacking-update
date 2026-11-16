@@ -7,6 +7,44 @@ here, it falls back to that version's commit messages.
 Format: `## <version>` starts a version, `- ` starts one change. The About page
 lists the entries of **every** version between the installed one and the target.
 
+## v0.2.1
+
+- Closing the window no longer freezes: OpenVINO telemetry is turned off at startup
+- In the training style, the last week's Saturday first visits the arcade for colored cards when there is enough money, and works only if nothing is bought
+
+## v0.2.0
+
+- On a Thursday with low stamina the rest is kept, so Friday's trip is not lost (gacha style)
+- Training days no longer rest based on stamina alone: the subject page is opened first, and you back out if it does not fit
+- The construction site no longer gets stuck when there is no steel: the "not enough building materials" dialog is recognized and closed
+- Saturday extra training with a colored frame is recognized now; when the day has no rest button, the bot trains if stamina allows and goes out otherwise
+- "Focus" and "Stamina" are separated, and the focus recovery switch has its real name back
+- A random event with two choices no longer stops on the dialog without choosing
+- After shopping, 120 pocket money is kept for the two target colored cards at the arcade; colored gacha in the card pool is bought too
+- On an outing day the arcade is checked first for the "note inheritance / player position" colored cards
+- When "Rowing race!" appears in the park it is chosen first; on the last week's Saturday the park is used only when there is a rowing race, otherwise the bot works
+- Choosing the "awareness" subject no longer clicks twice
+- Post-training stamina is read from the pill numbers only, taking the smaller of "current / after training", so a stamina increase is not undercounted
+- On the fourth week's Wednesday the subject is chosen by post-training stamina, keeping Thursday's session
+
+## v0.1.20
+
+- The "captain" controls in the installed build are no longer all grayed out
+- Six-attribute surge cards are not bought before week 7
+- When the urgent-hire queue does not get the urgent-hire card, the plan is restored instead of working empty-handed
+- Map decisions are recorded per day, so the last outing is not squeezed out by an urgent hire
+
+## v0.1.19
+
+- R-rarity captains now have their style and position recognized when choosing a captain
+- The low-focus dialog is handled before the page underneath, so the equipment page no longer loops forever
+- Team scores read all 5 positions even when OCR joins the text
+- The breath-hold difficulty page is recognized on its own; a card choice skipped by a pause is retried on the next tick
+- The rest threshold follows the version and no longer needs to be adjusted in the UI
+- With an arcade discount, the gacha style decides by the discounted threshold
+- The weekend picnic is decided by the stamina shortfall, and the old setting is dropped
+- Page recognition covers 17 more pages; the regression set went from 45.9% to 95.9%
+
 ## v0.1.18
 
 - The About page now lists the real changes instead of only the sync tag and version

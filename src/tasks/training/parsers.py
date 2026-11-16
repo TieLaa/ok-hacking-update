@@ -1675,7 +1675,9 @@ class TrainingParsersMixin:
     def probe_subject(self, box):
         """点开一个科目，返回预览信息：队友数 / 装备数 / 满经验数 / 彩虹边框。
 
-        另外带一个 `after` = 科目页顶栏读到的**训练后精力**（见 `preview_stamina`）。
+        另外带 `after` = 科目页顶栏读到的**训练后精力**（见 `preview_stamina`），
+        `fail` = **这个科目自己**的失败率（见 `read_fail_rate`）——每科各一个数，
+        不能拿进页第一帧那个科目的数字代表全部（2026-11-16 实跑）。
         """
         name = (box.name or "").strip()
         self.click_box(box, after_sleep=0.55)
@@ -1684,6 +1686,7 @@ class TrainingParsersMixin:
         self.dump_subject_frame(name, texts)
         preview = self.analyze_preview(texts, subject=name)
         preview["after"] = self.preview_stamina(texts)
+        preview["fail"] = self.read_fail_rate(texts)
         return preview
 
     def preview_stamina(self, texts):

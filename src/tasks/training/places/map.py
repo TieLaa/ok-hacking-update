@@ -106,14 +106,29 @@ class MapPlace:
         赚 240~420 零用钱**，而商店买牛奶/秘籍不占日期 —— 特训牛奶 50 币
         能让 3 天训练少耗 40% 精力（约 1 个训练日），对训练流严格更划算。
         """
-        # 2026-11-15 用户口径（收窄）：最后一周周六**只打工**。
-        # 原「有划船比赛就去公园」的立论是「比赛给钱和属性」，实跑（11-15 第1周
-        # 周六/周日两帧）证明比赛**不给钱**、只比普通划船多 +10 属性；第7周没有
-        # 训练日、精力不再兑现，235 零用钱换周日商店的 +80~90 属性明显更值。
+        # 2026-11-15 用户口径（第二次调整）：最后一周周六**零花钱超过 120 就先去
+        # 步行街刷最后一次彩卡**；买到了今天收工，没买成才去餐厅打工。
+        # 120 沿用商店那条储备线（`shop.keep_money_before_last_day`）：低于它连
+        # 一张彩卡都买不起，去也是白跑。
+        # 更早的口径「有划船比赛就去公园」已作废（实跑证明比赛不给钱）。
         week = self.current_day()[0]
         if week == SHOP_SEASON_WEEKS and (day or "六") == "六":
+            keep = int(params.shop.keep_money_before_last_day)
+            if st is not None and "步行街" in st.visited:
+                if st.gacha_spent:
+                    self.log_info("周末（第7周周六）：步行街买到卡了 → 今天不再打工")
+                    return []
+                self.log_info("周末（第7周周六）：步行街没买成 → 去餐厅打工")
+                return ["餐厅"]
+            money = self.read_money(texts)
+            if money is not None and money > keep:
+                self.log_info(
+                    f"周末（第7周周六）：零用钱 {money} > {keep}"
+                    " → 先去步行街刷彩卡（没买成再打工）")
+                return ["步行街", "餐厅"]
             self.log_info(
-                "周末（第7周周六）：没有训练日 → 去餐厅打工（钱留给周日商店）")
+                f"周末（第7周周六）：零用钱不够（{money}）→ 去餐厅打工，"
+                "钱留给周日商店")
             return ["餐厅"]
         gap = self.weekend_gap(texts)
         if gap is None:

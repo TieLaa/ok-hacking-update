@@ -44,6 +44,10 @@ from src.tasks.ui import Defs, labels
 PRIORITY = {
     # 专注不足弹框排在最前：它叠加在任何页面上，必须先处理
     "stamina_short": 5,
+    # 「专注恢复」整页同样是叠加层（盖在大厅 / 训练剧本上），
+    # 而且它的三行卡片会被当成竖排三选一 —— 2026-11-15 用户实跑里
+    # event_choice 抢走它连点「钻石购买」112 下，所以紧跟弹框。
+    "stamina_recover": 6,
     "game_title": 10,
     "construction": 20,
     "register_player": 25,
@@ -303,6 +307,25 @@ def _is_stamina_short(task, texts):
     弹框是**叠加在任何页面上的**，所以它的优先级要比所有页面都高。
     """
     return task.match_text(texts, ("专注还差", "是否进行回复")) is not None
+
+
+def _is_stamina_recover(task, texts):
+    """「专注恢复」整页 + 它的道具详情层（点「使用」后弹出）。
+
+    2026-11-15 用户实跑（v0.1.20，`run.log` 20:13:24）：这一页原来没有登记锚点，
+    分类器看到三行卡片就认成 `event_choice` → 路由把 `handle_event_choice`
+    提到最前 → 它把「钻石购买」当作竖排三选一的第一个，每秒点一次标题框
+    `(656,226)`，连点 112 下，一直到用户手动关窗口。
+
+    判据和 `handlers/stamina.py: in_stamina_recover_page` 同源 —— 那个方法
+    现在直接调 `is_page`，两份不会再漂移。
+    """
+    if task.match_text(texts, labels.STAMINA_RECOVER_MARKS[0]) is not None:
+        return True                                     # 标题「专注恢复」
+    if task.match_text(texts, labels.STAMINA_ITEM_DETAIL) is not None:
+        return True                                     # 详情层「使用道具」
+    return (task.match_text(texts, labels.STAMINA_RECOVER_MARKS[1]) is not None
+            and task.match_text(texts, "下次恢复") is not None)
 
 
 def _is_popup(task, texts):
@@ -635,6 +658,12 @@ def _is_event_choice(task, texts):
     # 形态和竖排事件选项一样 —— 用**页面标题**区分（2026-11-14 实测）。
     if _is_park(task, texts) or _is_restaurant(task, texts):
         return False
+    # 商店内页（2026-11-16 回归图 `shop-detail-train-effect.png`）：
+    # 货架是三列卡片、每张卡下面有价格，`options_not_paragraph` 会当成
+    # 两个以上选项 → 被认成事件页。用**商店独有的「上新时间」**排除
+    # （扭蛋/游戏厅卡面也有「能力详情」，但都没有这一行）。
+    if task.match_text(texts, "上新时间") is not None:
+        return False
     return True
 
 
@@ -811,6 +840,7 @@ _ANCHORS = {
     "training_hub": _is_training_hub,
     "breath_difficulty": _is_breath_difficulty,
     "stamina_short": _is_stamina_short,
+    "stamina_recover": _is_stamina_recover,
 }
 
 

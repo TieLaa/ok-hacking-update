@@ -5,6 +5,7 @@ from ok import ConfigOption
 
 from src.interaction.GirlsInteraction import GirlsInteraction
 from src.util.log_noise import install_quiet_filters
+from src.util.openvino_telemetry import disable_openvino_telemetry
 
 # ok 的 TaskExecutor 每个调度拍都打一行 `get_task_by_class ...`（整个任务列表的
 # repr），debug 模式下会把控制台刷满。过滤器只丢这一行，见 src/util/log_noise.py。
@@ -12,7 +13,11 @@ from src.util.log_noise import install_quiet_filters
 # 都会 import 本模块，是唯一能覆盖全部启动路径的单点（细节见该模块 docstring）。
 install_quiet_filters()
 
-version = "0.2.0"
+# OpenVINO 遥测在国内网络下会把退出流程卡死（线程栈见 shutdown_thread_dumps.txt），
+# 必须在 OCR 初始化前关掉。同样靠本模块的 import 时机覆盖所有启动路径。
+disable_openvino_telemetry()
+
+version = "0.2.1"
 #不需要修改version, Github Action打包会自动修改
 
 gui_config = {

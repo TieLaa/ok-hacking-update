@@ -13,6 +13,7 @@
 配套的 `flow` 侧：`note_run_score` / `finish_run` / 多角色队列在 `flow.py`。
 """
 
+from src.tasks.training import pages as page_registry
 from src.tasks.ui import Defs, labels
 
 import re
@@ -210,11 +211,12 @@ class StaminaHandlers:
         return True
 
     def in_stamina_recover_page(self, texts):
-        """「专注恢复」页判据：标题「专注恢复」或「当前专注」+「下次恢复」。"""
-        if self.match_text(texts, labels.STAMINA_RECOVER_MARKS[0]) is not None:
-            return True
-        return (self.match_text(texts, labels.STAMINA_RECOVER_MARKS[1]) is not None
-                and self.match_text(texts, "下次恢复") is not None)
+        """「专注恢复」页判据：标题「专注恢复」，或「当前专注」+「下次恢复」。
+
+        判据只写一份 —— 在 `pages.py: _is_stamina_recover`（分类器路由也用它），
+        这里只转发；改判据去改那一处。
+        """
+        return page_registry.is_page(self, texts, "stamina_recover")
 
     def stamina_deficit(self, texts):
         """这一趟要补多少专注 → int（读不到返回 None）。

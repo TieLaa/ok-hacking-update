@@ -224,6 +224,13 @@ class TrainingHandlers:
         """
         if self.match_text(texts, "星期") is None:
             return False
+        # 2026-11-16 实跑（`logs/1116-120249_真崎辉世/debug/1116-122126_noresp3s`）：
+        # 商店右栏的效果文案落进 `extra_train` 区域（「器材暴击训练收益+40%」），
+        # 「休息」也会出现在详情里 → 这一页被当训练日，每拍点的是详情文字，
+        # 点不动 → 3 次接管后停任务。商店一律让给 `handle_shop`
+        # （和 `handle_subject_select` 让商店同一个判据）。
+        if page_signatures.page_has(self, texts, "shop"):
+            return False
         # 2026-11-15 用户口径（百目鬼的「周六加训」）：那一页**没有「休息」**，
         # 上一格是带彩框的「训练」，下一格被「出行」占掉。所以判这一页 =
         # 有「休息」**或**按钮区里有「训练」。
@@ -465,7 +472,7 @@ class TrainingHandlers:
         fail = self.read_fail_rate(texts)
         if fail is None:
             # 科目页必有「失败率」（上面的前置判据就是它），读不到通常是页面淡入。
-            # 这时直接练会绕过「失败率上限(%)」配置（2026-11-10 19:09 实跑 1 次）。
+            # 这里只用来确认页面已经稳定；真正的「练还是休息」等所有科目探完再判。
             miss = getattr(self, "_fail_miss", 0) + 1
             self._fail_miss = miss
             if miss <= self.FAIL_MISS_TICKS:
@@ -474,17 +481,6 @@ class TrainingHandlers:
             self.log_warning(f"失败率连续 {miss} 拍读不到 → 按 0 处理继续训练")
         else:
             self._fail_miss = 0
-            self.info_set("当前失败率", f"{fail}%")
-        limit = int(self.config.get("失败率上限(%)"))
-        if fail is not None and fail > limit:
-            if self.config.get("失败率超限改休息"):
-                self._force_rest = True
-                self._force_reason = f"失败率 {fail}% 超过上限 {limit}%"
-                self.log_warning(f"失败率 {fail}% > {limit}% → 退出科目页，回主界面休息")
-                # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
-                self.exit_page(after_sleep=0.8)
-                return True
-            self.log_warning(f"失败率 {fail}% 超过上限 {limit}%（配置为不休息，继续）")
 
         # 用 subjects_from_texts：它会把被 OCR 拆成两个字的科目名合起来
         # （2026-10-27 第 4 周度假页「防守」被读成「防」「守」→ 整个科目漏掉）
@@ -522,12 +518,14 @@ class TrainingHandlers:
         if current in boxes:
             results[current] = self.analyze_preview(texts, subject=current)
             results[current]["after"] = self.preview_stamina(texts)
+            results[current]["fail"] = fail
             r = results[current]
             self.log_info(
                 f"当前已选「{current}」：队友 {r['mates']}｜经理 {r['manager']}"
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
                 f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}"
-                f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}")
+                f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}"
+                f"｜失败率 {r['fail'] if r['fail'] is not None else '?'}%")
 
         last_probed = None
         for name in candidates:
@@ -547,7 +545,33 @@ class TrainingHandlers:
                 f"探测「{name}」：队友 {r['mates']}｜经理 {r['manager']}"
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
                 f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}"
-                f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}")
+                f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}"
+                f"｜失败率 {r.get('fail') if r.get('fail') is not None else '?'}%")
+
+        # 失败率是**每个科目各一个数**（2026-11-16 12:43 实跑：投射 8% / 弹跳 15%
+        # / 防守 20% / 运控 5% / 意识 0%）。旧版拿进页第一帧、也就是当前选中科目的
+        # 数字判「练还是休息」——12:47 首帧投射 96% 就直接退出去休息，意识（0%、
+        # 还能回精力）连探测都没探。现在探完所有候选再判：只排除超限的科目，
+        # **全部超限**才按配置强制休息。
+        fail_limit = int(self.config.get("失败率上限(%)"))
+        probed = [n for n in candidates if n in results]
+        fails = {n: results[n].get("fail") for n in probed}
+        allowed = self.subjects_within_fail(fails, fail_limit)
+        if probed and not allowed:
+            rates = "、".join(f"{n} {v if v is not None else '?'}%"
+                              for n, v in fails.items())
+            if self.config.get("失败率超限改休息"):
+                self._force_rest = True
+                self._force_reason = f"所有科目失败率都超过上限 {fail_limit}%"
+                self.log_warning(f"失败率全部超过上限 {fail_limit}%（{rates}）"
+                                 " → 退出科目页，回主界面休息")
+                # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
+                self.exit_page(after_sleep=0.8)
+                return True
+            self.log_warning(f"失败率全部超过上限 {fail_limit}%（{rates}，配置为不休息，继续）")
+        elif len(allowed) < len(probed):
+            skipped = "、".join(f"{n} {fails[n]}%" for n in probed if n not in allowed)
+            self.log_info(f"失败率超过上限 {fail_limit}% 的科目先排除：{skipped}")
 
         # 六维当前值：进休息室时已经拍过快照（`parsers.snapshot_lounge`），
         # 这里**优先用那一份**，只有独立调用（回归 / 不带主循环）时才现场补读一次。
@@ -572,7 +596,10 @@ class TrainingHandlers:
         # 候选池 = 小人 / 金边 / 彩边 / 当前已选（用户 2026-10-27：三种信号都算）
         # 但只保留**真正探测过**的科目：探测失败的名字没有分数，留在池里等于按 0 分
         # 跟别人比，还可能被选去盲点；一个都没探到时退回当前已选，别乱点。
+        # 失败率超限的科目先排除（`allowed` 为空时是「配置为不休息」，退回全部探到的）。
         pool = [n for n in candidates if n in results]
+        if allowed:
+            pool = [n for n in pool if n in allowed]
         if not pool:
             pool = [current] if current in boxes else list(boxes)
         ranked = {n: rank(n) for n in pool}
@@ -630,7 +657,11 @@ class TrainingHandlers:
             if box is not None:
                 self.click_box(box, after_sleep=0.6)
         self._subject_confirmed_at = time.monotonic()
-        self.log_info(f"训练「{name}」（失败率 {fail}%）")
+        chosen_fail = (results.get(name) or {}).get("fail")
+        if chosen_fail is not None:
+            self.info_set("当前失败率", f"{chosen_fail}%")
+        self.log_info(f"训练「{name}」（失败率 "
+                      f"{chosen_fail if chosen_fail is not None else '?'}%）")
         return True
 
     def find_subject_box(self, name):

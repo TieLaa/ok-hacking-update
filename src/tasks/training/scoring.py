@@ -58,6 +58,18 @@ class TrainingScoringMixin:
     QUALITY_RANK = {"彩": 4, "金": 3, "紫": 2, "蓝": 1, "其他": 0}
 
     @classmethod
+    def subjects_within_fail(cls, fails, limit):
+        """失败率 ≤ limit 的科目；读不到（None）不拦，返回顺序跟传入一致。
+
+        2026-11-16 用户口径：失败率是**每个科目各一个数**（实跑：投射 8% /
+        弹跳 15% / 防守 20% / 运控 5% / 意识 0%）。旧版只拿进页第一帧、
+        也就是当前选中科目的数字判「练还是休息」，首帧 96% 就直接退出，
+        意识（0%、还能回精力）连探测都没探。只有**所有**科目都超限才休息。
+        """
+        return [name for name, value in fails.items()
+                if value is None or value <= limit]
+
+    @classmethod
     def pick_by_stamina(cls, ranked, after, limit):
         """按权重顺序挑第一个「训练后精力 ≥ limit」的科目；全都低于返回 None。
 
