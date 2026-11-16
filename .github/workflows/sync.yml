@@ -103,7 +103,9 @@ jobs:
           fi
           git tag -f "$TAG"
           git push origin HEAD:main
-          git push -f origin "refs/tags/$TAG"
+          # 提交跟着 tag 引用一起推：只推 refs/tags/<tag> 时，刚推上去的提交在服务器侧
+          # 还没可引用，会报 missing necessary objects（2026-11-15 v0.2.0 踩到）。
+          git push -f origin "HEAD:refs/tags/$TAG"
 
       # 国内更新源：China profile 的 git_url 指向 cnb.cool 上的同名镜像。
       # 纯事件驱动，没有定时抓取：GitHub 这边一推完就顺带把 main + tags 推过去。
@@ -121,3 +123,4 @@ jobs:
           git remote add cnb "https://cnb:${CNB_TOKEN}@cnb.cool/TieLaa/ok-hacking-update.git"
           git push cnb "HEAD:refs/heads/main" --force
           git push cnb --tags --force
+
