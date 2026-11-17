@@ -51,6 +51,9 @@ class TalentHandlers:
 
     STOCK_TITLE = labels.STOCK_PICK_TITLE
     STOCK_TYPES = ("稳健型", "平衡型", "风险型")
+    # 头一拍只观察、不点：这一页卡片是滑入的，第一拍点下去不生效，
+    # 紧接着的「确定」也白点（用户 2026-11-16 反馈）。
+    STOCK_SETTLE_TICKS = 1
 
     def handle_stock_pick(self, texts):
         """天赋「股神!」的模拟炒股：在**买得起**的卡里选**队友最多**的那张，再点确定。
@@ -69,6 +72,14 @@ class TalentHandlers:
         if self.match_text(texts, self.STOCK_TITLE) is None:
             return False
         self.dump_stock_frame(texts)
+        # 头一拍只观察、不点（同加强训练页 2026-11-02 的口径）：这一页是滑入动画，
+        # 第一拍卡片还没就位，点下去不生效，紧接着「确定」也白点
+        # （用户 2026-11-16 反馈「第一拍点击没生效，然后点确定也不生效」）。
+        ticks = getattr(self, "_stock_ticks", 0) + 1
+        self._stock_ticks = ticks
+        if ticks <= self.STOCK_SETTLE_TICKS:
+            self.log_debug(f"炒股：第 {ticks} 拍只观察（躲淡入）")
+            return True
         # 这一页的金币在右上角（真机截图 cx≈0.80, cy≈0.11），不在训练日顶栏的
         # 0.50~0.62 区域，read_money 读不到 → 用页内的读法兜底。
         money = self.read_money(texts)

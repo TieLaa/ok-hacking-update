@@ -612,8 +612,9 @@ class MonitorView(QWidget):
             lay.addWidget(self._btn_train)
 
             # 第二栏【■】停止（用户 2026-11-10 口径：照抄任务卡那颗【停止】，只留图标）：
-            # 语义 = 框架 `TaskCard.stop_clicked` → `task.disable()` + `task.unpause()`，
-            # 只停这一个任务；执行器/截图会话/快速比赛都不碰（那是第一栏的事）。
+            # 语义 = 只停这一个任务（`task.disable()`），**不调 `task.unpause()`**
+            # （它的实体是 `executor.start()`，会把快速比赛这类触发任务唤醒）；
+            # 执行器/截图会话/快速比赛都不碰（那是第一栏的事）。
             # 显隐也照任务卡：`enabled` 时才有这颗按钮（见 `_sync_switches`）。
             if spec.get("show_stop", True):
                 self._btn_stop = self._make_icon_button(
@@ -982,7 +983,8 @@ class MonitorView(QWidget):
         """第二栏【■ 停止】显隐：照框架 `TaskCard.update_buttons` —— 任务 enabled 才出现。
 
         `enabled+paused`（挂起态）也算 enabled，框架那颗 Stop 同样在，
-        点了同样是 `disable() + unpause()`。`training_enabled` 缺失时
+        点了是 `disable()` + 清暂停标志（**不调 `task.unpause()`**，它会唤醒执行器）。
+        `training_enabled` 缺失时
         退回 `training_active or training_paused`（两者都是 enabled 的子集）。
         """
         if self._btn_stop is None:

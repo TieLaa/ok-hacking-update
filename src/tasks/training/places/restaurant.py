@@ -27,7 +27,7 @@
 
 import re
 
-from src.tasks.training.constants import WORK_STAMINA_COST
+from src.tasks.training.constants import SHOP_SEASON_WEEKS, WORK_STAMINA_COST
 from src.tasks.ui import labels
 
 # 地点名（地图上的按钮文字 / 状态里的键）
@@ -84,6 +84,18 @@ class RestaurantPlace:
         counts, how = self.card_mate_counts(found)
         ranked, why = self.restaurant_preference(found, counts)
         urgent = self.restaurant_urgent_card(texts, found)
+        # 训练流·周六「看一眼」趟（地图缺口大才进来的）：只打「单卡 ≥3 人」的高收益工。
+        # 两张卡分散（2+2）= 普通工资，不如地图上的另一个地点 —— 返回空，走
+        # 「没有可选的卡」的退出路径，交回地图决定下一步；周日精力花光没法补，
+        # 那天根本不会走到这里（map.py 直接选另一个地点）。
+        # 急招插队趟不看这条（双倍工资本身就不亏）。
+        if (allow_fallback and self.style == "训练流"
+                and self.current_day()[0] < SHOP_SEASON_WEEKS
+                and (self.weekend_gap() or 0) >= int(self.config.get("周末划船缺口"))
+                and counts and max(counts) < 3):
+            self.log_info(
+                f"餐厅：两张卡分散（{counts}），最高 <3 人 → 普通工资不划算，退出餐厅")
+            return ()
         if not allow_fallback:
             # 插队趟（因地图急招才进餐厅）：**只认急招卡**。
             # 认不出 → ranked 为空，走下面「没有可选的卡」统一退出；

@@ -27,7 +27,7 @@ class PopupHandlers:
                       and (t.y + t.height / 2) / self.height > 0.62]
             target = bottom[0] if bottom else None
         if target is not None:
-            self.click_box(target, after_sleep=0.9)
+            self.click_box(target, after_sleep=0.15)
             self.log_info(f"休息确认：点「{target.name.strip()}」")
             return True
         return False

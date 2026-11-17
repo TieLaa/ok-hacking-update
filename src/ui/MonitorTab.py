@@ -817,13 +817,16 @@ class MonitorTab(CustomTab):
         self._update_data()
 
     def stop_auto_training(self):
-        """第二栏【■ 停止】—— 与框架 `TaskCard.stop_clicked` 逐字同源（用户 2026-11-10 口径）。
+        """第二栏【■ 停止】—— 只停这一个任务，**不唤醒执行器**。
 
-        ```python
-        self.task.disable()
-        self.task.unpause()
-        ```
-        只停这一个任务：
+        为什么不照抄框架 `TaskCard.stop_clicked` 的 `disable() + unpause()`：
+        框架的 `Task.unpause()` 实体是 `_paused = False` + **`executor.start()`**
+        （`ok/task/task.py:1224`），会把整个执行器从暂停里放出来 —— 于是
+        QuickMatchTask 这类 `_enabled: true` 的触发任务立刻开始每秒跑、随时点鼠标
+        （2026-11-17 用户复现：只按第一栏【启动】，鼠标被快速比赛拽走）。
+        详见 `docs/PROMPT_PLAYBOOK.md`「`task.unpause()` 是毒药」。
+
+        所以这里只 `disable()` + 清暂停标志（下一次【开始】不会卡在挂起态）：
         - 执行器、截图会话、快速比赛**都不碰**（执行器归第一栏）；
         - 配置和「本次注入的队列参数」**不清**（任务卡的 Stop 也不清）。
           想让注入的队列作废，改一次队长即可（`set_captain` 会清 `_launch_queue`）。
@@ -834,11 +837,11 @@ class MonitorTab(CustomTab):
             return
         try:
             task.disable()
-            task.unpause()
+            task._paused = False    # 只清标志；不能用 unpause()，它会 executor.start()
         except Exception as e:  # noqa: BLE001
             logger.error(f"停止自动训练失败: {e}")
         else:
-            logger.info("监控页：自动训练 → 停止（task.disable + unpause）")
+            logger.info("监控页：自动训练 → 停止（task.disable，不动执行器）")
         self._update_data()
 
     def _task_by_name(self, name):

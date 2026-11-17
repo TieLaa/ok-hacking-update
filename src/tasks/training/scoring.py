@@ -59,27 +59,34 @@ class TrainingScoringMixin:
 
     @classmethod
     def subjects_within_fail(cls, fails, limit):
-        """失败率 ≤ limit 的科目；读不到（None）不拦，返回顺序跟传入一致。
+        """失败率 ≤ limit 的科目；**一个都读不到**时才不拦。
 
         2026-11-16 用户口径：失败率是**每个科目各一个数**（实跑：投射 8% /
         弹跳 15% / 防守 20% / 运控 5% / 意识 0%）。旧版只拿进页第一帧、
         也就是当前选中科目的数字判「练还是休息」，首帧 96% 就直接退出，
-        意识（0%、还能回精力）连探测都没探。只有**所有**科目都超限才休息。
+        意识（0%、还能回精力）连探测都没探。
+
+        2026-11-16 收紧（用户：「选了还失败，说明不够严格」）：实测 13 次
+        `训练失败` **全部**发生在失败率读成 `?` 的那次训练上 —— 读不到的数
+        不是「安全」，而是「没看到风险」。所以只要**有任何一个科目读到了数字**，
+        读不到的就一律排除；全都没读到才退回「不拦」，免得整页读不出时停摆。
         """
-        return [name for name, value in fails.items()
-                if value is None or value <= limit]
+        known = {n: v for n, v in fails.items() if v is not None}
+        if not known:
+            return list(fails)
+        return [n for n, v in known.items() if v <= limit]
 
     @classmethod
     def pick_by_stamina(cls, ranked, after, limit):
-        """按权重顺序挑第一个「训练后精力 ≥ limit」的科目；全都低于返回 None。
+        """按权重顺序挑第一个「训练后精力 ≥ limit」的科目；没有返回 None。
 
-        `after` = 科目页顶栏读到的**训练后**精力（`None` = 读不到 → 不拦，
-        与项目里「读不到就不拦」的惯例一致）。
-        用户 2026-11-15 口径：第4周周三要保住周四那一练，宁可换一个科目。
+        `after` = 科目页顶栏读到的**训练后**精力。读不到（`None`）视为**不合格**
+        （2026-11-17 用户口径：第4周周三的目的就是保住周四那一练，读不到的数
+        不能当合格用）。
         """
         for name in sorted(ranked, key=ranked.get, reverse=True):
             value = after.get(name)
-            if value is None or value >= limit:
+            if value is not None and value >= limit:
                 return name
         return None
 

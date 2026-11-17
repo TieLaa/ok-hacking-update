@@ -167,7 +167,7 @@ class Style:
         raise NotImplementedError("pick_street_card 尚未接入；见 places/street.py")
 
     def should_rest(self, ctx):
-        """练还是休。默认先进科目页；扭蛋流 / 小游戏流周四有 60 门槛。
+        """练还是休。默认先进科目页；扭蛋流 / 小游戏流周四有 50 门槛。
 
         现有实现：daycycle.py: training_day_action
         """

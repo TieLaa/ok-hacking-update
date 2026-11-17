@@ -478,6 +478,9 @@ class ShopPlace:
         # 属性缺口、soft_cap 减半、余额、0 元商品规则照旧。
         final_week = week is not None and week >= LATE_SHOP_FROM_WEEK
         final_match = week == SHOP_SEASON_WEEKS and day == "日"
+        # 2026-11-17 用户口径：第 7 周**周六起**不再留 120 —— 最后一次出行就在周六，
+        # 留着也买不到下一张「笔记继承/球员位置」，反而挡住当天的金/彩卡。
+        late_no_reserve = week == SHOP_SEASON_WEEKS and day in ("六", "日")
         if final_week:
             items = [i for i in items
                      if i["price"] == 0
@@ -528,7 +531,8 @@ class ShopPlace:
         # 余额（2026-11-15 用户口径）：**最后一天之前**买完要剩 120，
         # 保证出行日还买得起步行街那两张「笔记继承 / 球员位置」。
         # 不限定流派 —— 训练流商店上新最频繁，以前每次上新都会把钱花光。
-        floor = 0 if final_match else int(params.shop.keep_money_before_last_day)
+        floor = 0 if (final_match or late_no_reserve) else int(
+            params.shop.keep_money_before_last_day)
         budget = None if money is None else money - floor
         affordable = [i for i in kept
                       if i["price"] == 0

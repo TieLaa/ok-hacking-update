@@ -202,11 +202,13 @@ LEAVE_RESETS = {
                               "_boost_gain_missing": 0, "_boost_gain_missing_at": 0.0},
     # 训练结果浮层的点击锁：离开就清，免得下次这页第一拍被误判成「刚点过」
     "handle_training_result": {"_result_click_at": 0.0},
+    # 炒股页的「第几拍」：离开就清零，下次进这页重新等一拍（躲淡入）
+    "handle_stock_pick": {"_stock_ticks": 0},
     # 「专注恢复」页喝饮料的点击锁：离开这页就清（下次进来重新计），
     # `_stamina_ticks` 是「这页连续占了多少拍」的兜底计数（见 STAMINA_PAGE_MAX_TICKS）
     "handle_stamina_recover": {"_stamina_use_at": 0.0, "_stamina_ticks": 0},
     # 憋气难度页的「卡片选过没」：离开这页就清，下次重新选
-    "handle_breath_difficulty": {"_breath_picked": False},
+    "handle_breath_difficulty": {"_breath_picked": False, "_breath_confirms": 0},
 }
 
 

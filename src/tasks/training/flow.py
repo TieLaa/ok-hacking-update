@@ -223,7 +223,13 @@ class TrainingFlowMixin:
         # GUI/CLI 走这里自己恢复基线（失败只告警，不打断用户手动起的任务）。
         self.begin_attempt()
         if not self.mcp_driven:
-            if not self.recover_to_lobby():
+            # 2026-11-17：当前就在已知流程页（确认编队 / 训练日首页 / 素材页…）时
+            # **不要先回大厅** —— 那些页面没有返回入口，recover_to_lobby 只会连点
+            # 返回箭头 + ESC，把「确认编队」这种只差一步开练的页面搅乱。
+            # 用户实测：勾了「允许开始训练」后点开始，机器人却在确认编队页点返回。
+            if self.is_startable():
+                self.log_info("GUI 运行：当前是已知流程页 → 就地继续（不回大厅）")
+            elif not self.recover_to_lobby():
                 self.log_warning("GUI 运行：自动回大厅失败，按当前界面继续"
                                  "（MCP 运行遇到同样情况会直接判失败）")
             else:
@@ -1280,11 +1286,13 @@ class TrainingFlowMixin:
 
         2026-11-15 用户口径：训练日一律先进科目页，精力低也先试
         （`daycycle.training_day_action`）；本函数的门槛还剩两处：
-          1. **周四硬阈值**：扭蛋流 / 小游戏流 60 —— 低精力休息是为了保证
+          1. **周四硬阈值**：扭蛋流 / 小游戏流 50 —— 低精力休息是为了保证
              周五能进出行地图（`training_day_action` 的例外分支）；
           2. **第4周周三挑科目**：要求「训练后精力 ≥ 这个值」（`stamina_gate_day`）。
 
-        用户 2026-11-04：**扭蛋流 / 小游戏流**在周四有硬阈值 **60**
+        2026-11-17 用户口径：周四硬阈值 60 → 50（与基础阈值相同，等于周四
+        不再比平时早休息 10 点）。
+        用户 2026-11-04：**扭蛋流 / 小游戏流**在周四有硬阈值 **50**
         （`rest.thursday_threshold_by_style`，取代旧的「周二 65」）；**其它流派
         （训练流 / 商店流）周四没有特殊限制**，只遵守策略参数
         `rest.stamina_threshold`（`strategy/params.json`）。
@@ -1305,6 +1313,9 @@ class TrainingFlowMixin:
         全队友参与的训练（收益最高），周三练完精力掉到 50 以下就只能休息，
         那天就白丢了（1115 实跑：周三 73 → 练完 33 → 周四休息）。
         别把这条推广到每一天：「换下一个科目」只在日程价值最高的那一天划算。
+
+        只在**候选**里挑（2026-11-17 用户口径）：没探测的科目没有「训练后精力」，
+        不参与改选，也不为这一天额外全探六个科目。
         """
         week, day = self.current_day(texts)
         return week == 4 and day == "三"

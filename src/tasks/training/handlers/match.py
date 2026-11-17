@@ -798,6 +798,41 @@ class MatchHandlers:
             why = "另一个是纯回精力 → 选收益未知的那个"
         return pick, why
 
+    def _colored_dialog_option(self, texts):
+        """角色事件二选一：一彩一白两条对白，返回**彩色那条**的框（没有则 None）。
+
+        2026-11-17 用户口径：带角色头像 + 彩色底的那条是默认选项。
+        两条都是台词，文字上分不出来，只能看底色：彩色条饱和度明显、白条接近中性。
+        """
+        frame = self.frame
+        if frame is None or not getattr(frame, "any", lambda: True)():
+            return None
+        h, w = frame.shape[:2]
+        cands = []
+        for t in texts or []:
+            name = t.name.strip()
+            if len(name) < 4 or "跳过" in name:
+                continue
+            cy = (t.y + t.height / 2) / h
+            if not (0.25 <= cy <= 0.68 and 0.18 <= t.width / w <= 0.85):
+                continue
+            x1 = max(0, t.x - int(t.height * 0.9))
+            x2 = min(w, t.x + t.width)
+            y1 = max(0, t.y - 4)
+            y2 = min(h, t.y + t.height + 4)
+            roi = frame[y1:y2, x1:x2]
+            if roi.size == 0:
+                continue
+            b, g, r = [float(roi[:, :, i].mean()) for i in range(3)]
+            bright = (b + g + r) / 3
+            sat = max(b, g, r) - min(b, g, r)
+            cands.append((t, bright, sat))
+        colored = [c for c in cands if c[1] >= 170 and c[2] >= 20]
+        white = [c for c in cands if c[1] >= 190 and c[2] <= 10]
+        if not colored or not white:
+            return None
+        return min(colored, key=lambda c: c[0].y)[0]
+
     def _yellow_choice_group(self):
         """底部黄框里「成行 / 成列、尺寸相近」的那一组（事件选项）。
 
@@ -905,6 +940,15 @@ class MatchHandlers:
         # 放签名表会把事件页也排除掉，所以单独判。
         if self.match_text(texts, "下一步") is not None:
             return False
+        # ---- 角色事件二选一：一彩一白两条对白（2026-11-17 用户口径）----
+        # 实拍 `1117-104001_nochange3/frame.jpg`：粉条带角色头像「可以是可以……」+
+        # 白条「拜托别这么幼稚了好吗？」+ 右上「跳过」（点了不响应）。
+        # 用户口径：**默认点带头像+颜色的那条**。两条都是台词，只能靠底色分。
+        colored = self._colored_dialog_option(texts)
+        if colored is not None:
+            self.log_info(f"角色事件选项（头像+颜色）：{colored.name.strip()} → 默认选它")
+            self.click_box(colored, after_sleep=0.45)
+            return True
         # ---- 竖向 2/3 选 1（白底彩边，跳过是灰的）----
         # **不要求白底**：事件页背景有时偏暖/偏暗，_has_white_band 会漏判；
         # 漏判后 dialog_continue 会去点灰的「跳过」，表现是一直点跳过、
@@ -982,7 +1026,12 @@ class MatchHandlers:
                       and all(self._has_white_band(t) for t in group))
         if group and len(group) >= 2 and (has_skip or len(group) >= 3
                                           or short_pair or plate_pair):
-            pick = min(group, key=lambda t: t.y)
+            # 2026-11-17 用户口径：纯回精力的选项先排掉（实拍器材事件
+            # 「精力恢复 / 属性上限 / 资金援助」，满精力还选了恢复），
+            # 剩下的仍按原来的「选第一个」。
+            non_stamina = [t for t in group
+                           if "精力恢复" not in t.name and "回复精力" not in t.name]
+            pick = min(non_stamina or group, key=lambda t: t.y)
             if os.environ.get("OK_DUMP_CHOICES"):
                 self.dump_unknown(texts, "choice_vertical")
             self.log_info("事件选项（竖向）：" + "、".join(t.name.strip() for t in group)

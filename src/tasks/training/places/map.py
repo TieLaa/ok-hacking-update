@@ -25,10 +25,12 @@ from src.tasks.training.constants import (
     PARK_PICNIC_STAMINA, SHOP_SEASON_WEEKS,
     WEEKEND_MAIN_PLACE, WEEKEND_PARK_GAP, WEEKEND_PLAN,
     WORK_STAMINA_COST)
+from src.tasks.training.places import street
 from src.tasks.ui import labels
 
 # 周末计划的一步：place=地点名，urgent=True=急招临时插队（不是今天的主计划），
-# probe=True=探卡池（所有流派出行日的第一步：只去步行街找笔记继承/球员位置）。
+# probe=True=探卡池（所有流派出行日的第一步：只去步行街找笔记继承/球员位置，
+# 买到一张后当天转正常购买逻辑，见 `handle_street`）。
 WeekendStep = namedtuple(
     "WeekendStep", "place urgent probe", defaults=(False,))
 
@@ -135,6 +137,14 @@ class MapPlace:
             return None
         row_gap = int(self.config.get("周末划船缺口"))
         if gap >= row_gap:
+            # 周六：精力花光周日还能补 → 先去餐厅看一眼，单卡 ≥3 人的高收益工
+            # 就打（`restaurant.restaurant_preference` 里「分散就回公园」）。
+            # 周日：花光精力下周训练日就少一天 → 直接公园，不为 100 多币赌掉一练。
+            if (day or "六") == "六":
+                self.log_info(
+                    f"周末（周六）缺口 {gap} ≥ {row_gap} → 先餐厅看一眼"
+                    "（单卡 ≥3 才打工，分散回公园；周日还能补精力）")
+                return ["餐厅", "公园"]
             return ["公园"]
         self.log_info(
             f"周末缺口 {gap} < {row_gap} → 餐厅打工"
@@ -353,7 +363,8 @@ class MapPlace:
         - 不管什么流派、什么零用钱，只要是出行日就先看一眼；
         - 没有这两张就退出，回地图走原计划（`handle_street` 进门即
           `mark_tried`，今天只探一次）；
-        - 这趟只买这两张的**彩色**版本（`street.gacha_candidates(allow_others=False)`）。
+        - 这趟只买这两张的**彩色**版本（`street.gacha_candidates(allow_others=False)`）；
+          买到一张后当天转正常购买逻辑（`handle_street`，2026-11-17）。
 
         例外只有三种（都是游戏/开关的硬限制）：
         - **第7周周日不能出行**：`today_places` 已返回空计划，这里不插；
@@ -362,6 +373,8 @@ class MapPlace:
 
         第 3 周海边前周末也照探（用户 2026-11-15 补充口径：这是最高优先级，
         不看体力）——买到就花掉一天，没买到退出继续原计划。
+
+        2026-11-17 用户口径：两张目标卡都到手后**不再探**（`top_gacha_got`）。
 
         计划里已经有步行街（扭蛋流钱够 / 打折改道）时不插：
         正常模式照旧买最好的卡，这两张已经靠排序键排第一。
@@ -375,6 +388,8 @@ class MapPlace:
         if "步行街" in st.gacha_tried or "步行街" in st.visited:
             return steps
         if any(s.place == "步行街" for s in steps):
+            return steps
+        if set(street.TOP_GACHA_NAMES) <= self.top_gacha_got():
             return steps
         self.log_info("周末：先去步行街找「笔记继承/球员位置」")
         return [WeekendStep("步行街", False, True)] + steps
@@ -470,11 +485,11 @@ class MapPlace:
         算法（划船 +30 / 野餐 +70 / 打工 −25）：
 
             周六：今天还能靠周日补一次
-                < 目标−70 → 今天必须先补，整天只去公园
+                < 目标−70 → 今天必须先补（原计划有步行街则保留，公园补）
                 < 目标−45 → 今天不打工（打工后周日一次野餐也补不回）
                 ≥ 目标−45 → 原计划（打工后周日野餐兜底）
             周日：今天就是最后一次机会
-                < 目标    → 整天只去公园
+                < 目标    → 补体力（原计划有步行街则保留，公园补）
                 < 目标+25 → 今天不打工（打完就掉到目标以下）
                 ≥ 目标+25 → 原计划
 
@@ -496,6 +511,12 @@ class MapPlace:
         if day == "六":
             must_recover = target - PARK_PICNIC_STAMINA
             if stamina < must_recover:
+                kept = self._keep_planned_street(steps, st)
+                if kept is not None:
+                    self.log_info(
+                        f"海边前周末：周六体力 {stamina} < {must_recover}"
+                        "（周日一次野餐也补不回）→ 保留步行街，公园补体力")
+                    return kept
                 self.log_info(
                     f"海边前周末：周六体力 {stamina} < {must_recover}"
                     "（周日一次野餐也补不回）→ 今天先去公园")
@@ -503,6 +524,12 @@ class MapPlace:
             floor = target - (PARK_PICNIC_STAMINA - WORK_STAMINA_COST)
         else:
             if stamina < target:
+                kept = self._keep_planned_street(steps, st)
+                if kept is not None:
+                    self.log_info(
+                        f"海边前周末：周日体力 {stamina} < {target}"
+                        " → 保留步行街（正常购买），公园补体力")
+                    return kept
                 self.log_info(
                     f"海边前周末：周日体力 {stamina} < {target} → 今天先补体力")
                 return self.vacation_eve_park(st)
@@ -519,6 +546,22 @@ class MapPlace:
                 f"（还剩 {'、'.join(s.place for s in kept)}）")
             return kept
         return steps
+
+    def _keep_planned_street(self, steps, st):
+        """体力不够、原计划本来就要去步行街：保留它，公园补体力。
+
+        步行街不耗体力；正常模式本来就会优先买彩卡
+        （`street.gacha_candidates` 的排序键），所以不归探卡池管
+        （2026-11-17 用户口径）。补体力日不去餐厅（打工 −25 会毁掉目标）。
+        公园已经去过（补不回来）返回 None，交给原逻辑结束当天。
+        """
+        if not any(s.place == "步行街" for s in steps):
+            return None
+        park = self.vacation_eve_park(st)
+        if not park:
+            return None
+        kept = [s for s in steps if s.place not in ("餐厅", "公园")]
+        return kept + park
 
     def vacation_eve_park(self, st):
         """今天只去公园；公园今天已经去过就返回空计划（当天结束）。"""

@@ -102,6 +102,14 @@ CODE_VERSION = "2026-11-02b"
 # 误读就这一格不动（保留上次的值），下一帧读干净了自然补上。
 ATTR_PAIR_RE = re.compile(r"(\d{1,4})\s*/\s*(\d{1,4})")
 ATTR_NUM_RE = re.compile(r"(\d{2,4})")
+
+# 面板「训练后增量」的红色 +N：主 = 点的那个科目，副 < 主的一半（2026-11-15 实测）。
+# 排除三种误抓（2026-11-16 复查）：
+#   - `C+354` 这类评级字母：OCR 常在字母和 + 之间留空格，所以先去掉空格再匹配；
+#   - `C+354/±90` 里的 `±90`（区间标记，不是增量）；
+#   - `S+30` 被读成 `303` 这种黏连，用 PANEL_GAIN_MAX 兜住。
+PANEL_GAIN_RE = re.compile(r"(?<![A-Za-z±土])\+\s*(\d{1,3})")
+PANEL_GAIN_MAX = 200        # OCR 黏连时「S+30」读成 303，超 200 直接丢弃
 ATTR_MIN_VALUE = 100
 ATTR_CAP_MIN, ATTR_CAP_MAX = 500, 9999
 ATTR_KEYS = 6                  # 六维齐全才算得出可信的「分数预测」
@@ -674,6 +682,10 @@ class TrainingParsersMixin:
             self.log_warning(
                 f"商店解析出 {len(items)} 件商品，超过 {self.SHOP_COLS}x{self.SHOP_ROWS} "
                 f"网格容量 {self.SHOP_MAX_ITEMS} 件，请补一张商店截图核区域")
+        # 点卡读详情的顺序：**从上到下、从左到右**。原来直接按 OCR 检出顺序，
+        # 鼠标东一下西一下（用户 2026-11-17 反馈）；OCR 顺序不保证空间顺序。
+        # 行距约 0.27 屏高，按 0.15 分桶不会把两行混在一起。
+        items.sort(key=lambda i: (round(i["y"] / self.height / 0.15), i["x"]))
         return items
 
     def card_quality(self, name_box, price_box):
@@ -1243,12 +1255,72 @@ class TrainingParsersMixin:
         """
         return self.day_state()
 
-    def read_fail_rate(self, texts):
-        """读取当前选中科目的失败率（0~100），读不到返回 None。"""
-        joined = "".join(t.name for t in self.texts_in_region(texts, "fail_rate")).replace(" ", "")
-        if m := labels.FAIL_RATE_RE.search(joined):
-            return int(m.group(1))
-        return None
+    def read_fail_rate(self, texts, subject=None):
+        """当前选中科目的失败率（0~100），读不到返回 None。
+
+        2026-11-17 用户口径：失败率标签跟着**选中那一行**走，位置固定、
+        只是随行移动。六个位置已人工框好（`strategy/fail_boxes.json`），
+        有 `subject` 就直接裁那个框读 —— 比整页找标签稳，也不会读到别的行。
+
+        兜底仍保留整页找「失败率」那套（标注框读不到、或没传 subject 时）。
+        """
+        if subject:
+            box = self.fail_boxes().get(subject)
+            frame = self.frame
+            if box and frame is not None and getattr(frame, "any", lambda: True)():
+                again = zoom_reread.reread_region(
+                    frame, self, (box["x"], box["y"],
+                                  box["x"] + box["w"], box["y"] + box["h"]))
+                joined = "".join(a[0] for a in again).replace(" ", "")
+                m = re.search(r"(\d{1,3})", joined)
+                if m:
+                    return int(m.group(1))
+        label = None
+        for t in texts or []:
+            name = t.name.replace(" ", "")
+            if "败率" not in name:          # 兼容「失败率／败率／夫败率」三种误读
+                continue
+            m = labels.FAIL_RATE_RE.search(name)
+            if m:
+                return int(m.group(1))
+            # 标签自己就带数字（`夫败率0`）：直接取，别再去裁图
+            m = re.search(r"(\d{1,3})", name)
+            if m:
+                return int(m.group(1))
+            if label is None:
+                label = t
+        if label is None:
+            return None
+        # 数字被拆成**另一个框**（实拍：`失败率` 和 `%` 两个框）：在同一行右侧找纯数字框
+        cy = label.y + label.height / 2
+        right = label.x + label.width
+        near = None
+        for t in texts or []:
+            if abs((t.y + t.height / 2) - cy) > self.height * 0.04:
+                continue
+            if not (right - self.width * 0.02 <= t.x <= right + self.width * 0.12):
+                continue
+            m = re.search(r"(\d{1,3})", t.name.replace(" ", ""))
+            if m:
+                near = int(m.group(1))
+                break
+        # 贴着标签的第一位数字可能被标签压住（实拍 2026-11-17：`失败率 71%` 只
+        # 读到右边的 `1%`，把 71 当成 1 放行了一次训练）。所以只要标签本身没有
+        # 数字，就**放大重读**标签右侧一条：从标签 3/4 处起，覆盖压住的那一位。
+        frame = self.frame
+        if frame is not None and getattr(frame, "any", lambda: True)():
+            h, w = frame.shape[:2]
+            x1 = (label.x + label.width * 0.5) / w
+            x2 = min(1.0, (label.x + label.width + 0.16 * w) / w)
+            y1 = max(0.0, (label.y - label.height * 0.3) / h)
+            y2 = min(1.0, (label.y + label.height * 1.3) / h)
+            if x2 > x1 and y2 > y1:
+                again = zoom_reread.reread_region(frame, self, (x1, y1, x2, y2))
+                joined = "".join(a[0] for a in again).replace(" ", "")
+                m = re.search(r"(\d{1,3})", joined)
+                if m:
+                    return int(m.group(1))
+        return near
 
     def subjects_from_texts(self, texts):
         """从 OCR 结果取「科目名 -> 框」，并把被 OCR 拆成两个字的科目合起来。
@@ -1680,14 +1752,67 @@ class TrainingParsersMixin:
         不能拿进页第一帧那个科目的数字代表全部（2026-11-16 实跑）。
         """
         name = (box.name or "").strip()
-        self.click_box(box, after_sleep=0.55)
+        # 点之前**用新帧重新定位**：`box` 是这一拍开头 OCR 出来的，前面几个科目
+        # 点过之后列表会整体上移，旧坐标会点偏/点空 —— 点空时面板仍是上一个科目，
+        # 这正是「弹跳和运控读出同一组 31+12」的来源（用户 2026-11-16 实测：
+        # 面板是瞬间切换的，慢不了，所以只能是这一下没点中）。
+        self.next_frame()
+        fresh = self.subjects_from_texts(self._ocr_region()).get(name)
+        if fresh is not None:
+            box = fresh
+        self.click_box(box, after_sleep=0.15)
+        # 点完取一帧（F2，t≈0.15）：**面板增量、失败率都读这一帧**。
+        # 2026-11-17 用户口径：0.1 秒时横幅偶尔还没画出来（实测差 0.05 秒），
+        # 0.15 刚好；不再等 0.4 秒、也不再连读两拍确认（F3 取消）。
+        self.next_frame()
+        gains = self.read_panel_gains(self._ocr_region("attr_gains"), name)
         texts = self._ocr_region()
         self.log_debug(f"场上角色名：{self.scene_names(texts)}")
         self.dump_subject_frame(name, texts)
         preview = self.analyze_preview(texts, subject=name)
         preview["after"] = self.preview_stamina(texts)
-        preview["fail"] = self.read_fail_rate(texts)
+        preview["fail"] = self.read_fail_rate(texts, subject=name)
+        if gains is not None:
+            preview["base_main"], preview["base_sub"] = gains
+        self.dump_panel_crop(name)
         return preview
+
+    def dump_panel_crop(self, subject):
+        """把这一拍**送给 OCR 的那块原图**（六维面板）存下来。
+
+        用途（用户 2026-11-16）：事后拿这些原图核对/加强 OCR 的读法 ——
+        红字是压在「当前值/上限」上的，只有原图能看出 OCR 该读成什么。
+        每局最多 120 张，存到 `logs/subject_panels/<本局>/<时间>_<科目>.jpg`。
+        """
+        try:
+            import os
+            import time
+            frame = self.frame
+            if frame is None or not frame.any():
+                return
+            if getattr(self, "_panel_crops", 0) >= 120:
+                return
+            h, w = frame.shape[:2]
+            x1, y1, x2, y2 = Defs.region("attr_gains")
+            crop = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
+            if crop.size == 0:
+                return
+            from src.tasks.training.constants import PROJECT_ROOT
+            base = os.path.join(PROJECT_ROOT, "logs", "subject_panels")
+            run = os.path.basename(getattr(self.evidence, "round_dir", "") or "run")
+            out_dir = os.path.join(base, run)
+            os.makedirs(out_dir, exist_ok=True)
+            name = f"{time.strftime('%H%M%S')}_{subject}.jpg"
+            path = os.path.join(out_dir, name)
+            # 不能用 `cv2.imwrite`：它按系统 ANSI 码页（936）编码路径，
+            # 中文目录/文件名会被写坏（实测生成 `寮硅烦` 这种乱码名）。
+            ok, buf = cv2.imencode(".jpg", crop,
+                                   [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            if ok:
+                buf.tofile(path)
+            self._panel_crops = getattr(self, "_panel_crops", 0) + 1
+        except Exception as e:            # 存图失败绝不能影响训练
+            self.log_debug(f"面板存图失败: {e}")
 
     def preview_stamina(self, texts):
         """科目页顶栏的「训练后精力」= 药丸上的数字（用户 2026-11-15 口径）。
@@ -1782,6 +1907,355 @@ class TrainingParsersMixin:
             # 队长总在场，所以队友数 = 场上名字 - 队长（- 经理已经被扣掉）
             "mates": max(0, len(mates) - 1),
         }
+
+    # 六维面板的行列（与 `Defs.region("attr_panel")` 内的实际版式一致，
+    # 300 帧核对过位置固定）：左列 投射/弹跳/运控，右列 体能/防守/意识。
+    PANEL_ROW_BANDS = ((0.72, 0.80), (0.80, 0.875), (0.875, 0.96))
+    PANEL_ATTR_GRID = (("投射", "体能"), ("弹跳", "防守"), ("运控", "意识"))
+    PANEL_SPLIT_X = 0.35          # 左右列分界（左列数值框右沿实测 < 0.35w）
+
+    def panel_cell(self, box):
+        """兜底：按固定 3×2 网格算归属（名字框一个都没读到时才用）。"""
+        if self.width <= 0 or self.height <= 0:
+            return None
+        cy = (box.y + box.height / 2) / self.height
+        cx = (box.x + box.width / 2) / self.width
+        if cx > 0.66:
+            return None
+        for ri, (y1, y2) in enumerate(self.PANEL_ROW_BANDS):
+            if y1 <= cy < y2:
+                return self.PANEL_ATTR_GRID[ri][0 if cx < self.PANEL_SPLIT_X else 1]
+        return None
+
+    def panel_attr_of(self, box, names):
+        """增量框归给哪个属性：**同一行、位于它左侧、横向最近的属性名**。
+
+        为什么必须要求「名字在左边」（2026-11-16 用户指出版式是
+        「[图标][名字][评级][当前/上限][+N]」）：增量框永远在名字右侧，
+        只比「最近」会把 `弹跳 +9` 判给右列同一行的 `防守`（它的中心反而更近）。
+        「在左边」这条约束一加，归属就唯一了。
+        """
+        if not names:
+            return None
+        cy = box.y + box.height / 2
+        cx = box.x + box.width / 2
+        best = None
+        for name, t in names:
+            if abs((t.y + t.height / 2) - cy) > self.height * 0.035:
+                continue
+            ncx = t.x + t.width / 2
+            if ncx >= cx:                    # 只在左边找
+                continue
+            d = cx - ncx
+            if best is None or d < best[0]:
+                best = (d, name)
+        return best[1] if best else None
+
+    def panel_gain_values(self, texts):
+        """用**颜色**把「增量数字」抠出来再 OCR：`{属性: +N}`。
+
+        为什么不能只用文本（2026-11-16 用户实测）：红字是**压在「当前值/上限」
+        上面**的，OCR 会把两者黏成一个数 —— `688/+80` 的真值是 `+8`（80 里的
+        0 是上限的尾数）。红/金色只有增量在用，按颜色抠图后 OCR 就不会黏。
+        行归属仍按「同一行、名字在左边」的规则（`panel_attr_of`）。
+        """
+        frame = self.frame
+        if frame is None or not frame.any():
+            return {}
+        h, w = frame.shape[:2]
+        rx1, ry1, rx2, ry2 = Defs.region("attr_gains")
+        x1, y1 = int(w * rx1), int(h * ry1)
+        crop = frame[y1:int(h * ry2), x1:int(w * rx2)]
+        if crop.size == 0:
+            return {}
+        b, g, r = cv2.split(crop.astype(np.int16))
+        red = (r > 140) & (r - g > 45) & (r - b > 55)
+        gold = (r > 175) & (g > 120) & (g - b > 45)
+        mask = ((red | gold).astype(np.uint8)) * 255
+        if not mask.any():
+            return {}
+        mask = cv2.dilate(mask, np.ones((2, 2), np.uint8), iterations=1)
+        big = cv2.resize(cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR), None, fx=3, fy=3,
+                         interpolation=cv2.INTER_NEAREST)
+        names = [(t.name.strip(), t) for t in
+                 self.texts_in_region(texts or [], "attr_gains")
+                 if t.name.strip() in labels.TRAINING_SUBJECTS]
+        out = {}
+        try:
+            boxes = self.ocr(frame=big) or []
+        except Exception as e:            # OCR 不可用（回归环境）时退回文本判据
+            self.log_debug(f"增量颜色 OCR 失败: {e}")
+            return {}
+        for box in boxes:
+            m = re.search(r"(\d{1,3})", box.name)
+            if not m:
+                continue
+            v = int(m.group(1))
+            if v > PANEL_GAIN_MAX:
+                continue
+            abs_box = Box(name=box.name, x=x1 + box.x // 3, y=y1 + box.y // 3,
+                          width=max(1, box.width // 3), height=max(1, box.height // 3))
+            attr = self.panel_attr_of(abs_box, names) or self.panel_cell(abs_box)
+            if attr:
+                out[attr] = max(out.get(attr, 0), v)
+        return out
+
+    # 人工标注的框（`tools/pick_panel_boxes.py` 生成 `strategy/panel_boxes.json`）
+    # 坐标是相对**面板裁图**的；裁图横向固定 (0.03~0.80)，纵向到屏幕底。
+    # 纵向起点由标注图的原始高度推回来（存图改动过裁切高度，见 JSON 的 src_h）。
+    # 放在 `src/` 下而不是 `configs/`：`configs/` 被 .gitignore 排除，装出来的
+    # exe 里不会有这个文件，读数会静默退回旧的文本 OCR（2026-11-17 发现）。
+    PANEL_TEMPLATE_X = (0.03, 0.80)
+
+    @staticmethod
+    def panel_template():
+        """读 `strategy/panel_boxes.json` → `{属性: 该行的框列表}`（整屏相对坐标）。
+
+        标注按行给出：每行从左到右是 图标 / 名字 / 评级 / 数值 / 红字。
+        行列靠位置定：第 0 行左=投射 右=体能，第 1 行左=弹跳 右=防守，
+        第 2 行左=运控 右=意识（与面板版式一致）。
+        文件不存在就返回空 dict，调用方退回 OCR 判据。
+        """
+        cached = getattr(TrainingParsersMixin, "_panel_tpl", None)
+        if cached is not None:
+            return cached
+        try:
+            import json
+            import os
+            from src.tasks.training.constants import PROJECT_ROOT
+            path = os.path.join(PROJECT_ROOT, "src", "tasks", "training",
+                                "strategy", "panel_boxes.json")
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception:
+            TrainingParsersMixin._panel_tpl = {}
+            return {}
+        src_h = 244                     # 旧格式没存高度：当时标注底图 1192×244
+        raw = data
+        if isinstance(data, dict):
+            raw = data.get("boxes") or []
+            src_h = data.get("src_h") or 244
+        sx1, sx2 = TrainingParsersMixin.PANEL_TEMPLATE_X
+        sy1, sy2 = 1.0 - src_h / 871.0, 1.0
+        rows = []
+        for b in sorted(raw, key=lambda x: (x["y"], x["x"])):
+            for r in rows:
+                if abs(r[0]["y"] - b["y"]) < 0.12:
+                    r.append(b)
+                    break
+            else:
+                rows.append([b])
+        grid = (("投射", "体能"), ("弹跳", "防守"), ("运控", "意识"))
+        out = {}
+        for ri, row in enumerate(rows[:3]):
+            row.sort(key=lambda x: x["x"])
+            for b in row:
+                left = b["x"] + b["w"] / 2 < 0.35
+                name = grid[ri][0 if left else 1]
+                out.setdefault(name, []).append({
+                    "x": sx1 + b["x"] * (sx2 - sx1),
+                    "y": sy1 + b["y"] * (sy2 - sy1),
+                    "w": b["w"] * (sx2 - sx1),
+                    "h": b["h"] * (sy2 - sy1),
+                })
+        TrainingParsersMixin._panel_tpl = out
+        return out
+
+    @staticmethod
+    def fail_boxes():
+        """读 `strategy/fail_boxes.json` → `{科目: {x,y,w,h}}`（整屏相对坐标）。
+
+        失败率横幅跟着选中的科目行走；六个位置由 `tools/pick_fail_boxes.py`
+        人工框定（等距 106px 推出来的）。文件不存在返回空 dict，调用方退回
+        整页找「失败率」的逻辑。
+        """
+        cached = getattr(TrainingParsersMixin, "_fail_boxes_cache", None)
+        if cached is not None:
+            return cached
+        try:
+            import json
+            import os
+            from src.tasks.training.constants import PROJECT_ROOT
+            path = os.path.join(PROJECT_ROOT, "src", "tasks", "training",
+                                "strategy", "fail_boxes.json")
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            out = {b["subject"]: b for b in data.get("boxes", [])}
+        except Exception:
+            out = {}
+        TrainingParsersMixin._fail_boxes_cache = out
+        return out
+
+    def panel_gains_by_boxes(self, subject, texts=None):
+        """用人工标注的框读增量：每行只把「数值+红字」那段裁出来，按颜色 OCR。
+
+        标注框比整块面板准：行归属、数值边界都由人工给定，不再依赖 OCR 找名字；
+        红字压在上限上的问题也只剩「按颜色抠」这一道。
+        """
+        out = self.panel_gains_all(texts)
+        if out is None:
+            return None
+        main = out.get(subject)
+        if main is None:
+            return None
+        others = [v for k, v in out.items() if k != subject]
+        return main, (max(others) if others else 0)
+
+    def panel_gains_all(self, texts=None):
+        """读六维面板每行的增量，返回 `{属性: N}`；面板不可用返回 None。
+
+        `texts` 是同一帧的整屏 OCR（可选）：属性名的实际 y 比标注框可靠——
+        标注框画得松、红字又常比数值高半行，按数值框中心裁切会把 `7` 的顶横切掉。
+        """
+        tpl = self.panel_template()
+        frame = self.frame
+        if not tpl or frame is None or not frame.any():
+            return None
+        h, w = frame.shape[:2]
+        name_y = {}
+        for t in self.texts_in_region(texts or [], "attr_gains"):
+            nt = (t.name or "").strip()
+            if nt in tpl:
+                name_y.setdefault(nt, []).append((t.y + t.height / 2) / h)
+        out = {}
+        for name, boxes in tpl.items():
+            xs = [b["x"] for b in boxes]
+            # 数值框是每列的第 4 个（图标/名字/评级/数值/可选红字）。
+            # 裁切从**数值框左边界**开始：评级字母有时是红/金色，会混进来当噪声。
+            if len(boxes) >= 4:
+                value_box = boxes[3]
+                x1 = xs[3]
+            else:
+                value_box = boxes[-1]
+                x1 = xs[-1]
+            # 带子要够高：红字比数值大（实测 `+37` 约 45px 高），±0.020 时
+            # `7` 的顶横被切掉（读成 `/`），±0.028 也还差一点。
+            yc = value_box["y"] + value_box["h"] / 2
+            # 名字可能被 OCR 读到多处（面板外也有同名文字）：取离标注框中心最近的那个。
+            if name_y.get(name):
+                yc = min(name_y[name], key=lambda v: abs(v - yc))
+            half = 0.035
+            y1, y2 = yc - half, yc + half
+            # 右边界 = 数值框右缘 + 一点余量：`+34` 这种两位数要包住，但不能
+            # 一直放到 0.80 —— 右侧紧挨着科目列表，金色边框会被当成增量
+            # （实拍 005357_投射：防守行读出一个不存在的 `+7`）。
+            x2 = min(0.80, value_box["x"] + value_box["w"] + 0.06)
+            crop = frame[int(y1 * h):int(y2 * h), int(x1 * w):int(x2 * w)]
+            if crop.size == 0:
+                continue
+            b, g, r = cv2.split(crop.astype(np.int16))
+            red = (r > 140) & (r - g > 45) & (r - b > 55)
+            gold = (r > 175) & (g > 120) & (g - b > 45)
+            mask = ((red | gold).astype(np.uint8)) * 255
+            if not mask.any():
+                out[name] = 0
+                continue
+            mask = cv2.dilate(mask, np.ones((2, 2), np.uint8), iterations=1)
+            # 去掉零星红噪点（面板装饰边、隔壁图标）：只留够高的连通块，
+            # 否则包围盒会被首尾噪点拉到整条，数字被压小后读歪（实测 37→31）。
+            n_lab, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+            keep = [i for i in range(1, n_lab)
+                    if 8 <= stats[i, cv2.CC_STAT_HEIGHT] <= 60
+                    and 25 <= stats[i, cv2.CC_STAT_AREA]
+                    and stats[i, cv2.CC_STAT_WIDTH] <= 60]
+            if not keep:
+                out[name] = 0
+                continue
+            # 只保留**本行**的块：带子放宽后，上/下行的红字也会被扫进来，
+            # 按「块中心离本行中心 < 1/3 行距」筛掉。
+            mid = half * h
+            keep = [i for i in keep
+                    if abs(stats[i, cv2.CC_STAT_TOP] + stats[i, cv2.CC_STAT_HEIGHT] / 2 - mid) <= 0.030 * h]
+            if not keep:
+                out[name] = 0
+                continue
+            mask = (np.isin(labels, keep).astype(np.uint8)) * 255
+            # 只把红色像素的紧包围盒送去 OCR：整条横条可能 1000+ px 宽，
+            # 超过检测器输入上限会被直接丢掉（实测「+20」「+12」读不出）。
+            ys, xs = np.where(mask > 0)
+            mask = mask[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+            mask = cv2.copyMakeBorder(mask, 6, 6, 6, 6, cv2.BORDER_CONSTANT, value=0)
+            mh, mw = mask.shape
+            scale = max(1.0, min(96.0 / mh, 900.0 / mw))
+            big = cv2.resize(cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR), None,
+                             fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+            try:
+                toks = self.ocr(frame=big) or []
+            except Exception:
+                return None
+            # 红字在最右边：先按 x 排序，把**紧挨着的数字块拼起来**（`+33` 常被
+            # OCR 拆成两个 `3`，只取最右一个就变成 `+3`），再取最右那一组。
+            toks = sorted(toks, key=lambda b: b.x)
+            groups = []
+            for box in toks:
+                if groups and box.x - (groups[-1][-1].x + groups[-1][-1].width) < max(6, box.height * 0.5):
+                    groups[-1].append(box)
+                else:
+                    groups.append([box])
+            best = 0
+            for group in reversed(groups):
+                text = "".join(b.name for b in group)
+                m = re.search(r"\+\s*(\d{1,3})", text)
+                if not m:
+                    # 增量一定带 `+`（普通 `+N`，金色 `⇈+N`），但 `+` 偶尔会被
+                    # 抠丢（实拍 005659_体能 的 `+18` 只读出 `18`）。所以两位数
+                    # 以上仍认；**单个数字又不带 `+`** 的是面板红色装饰
+                    # （实拍 005357_投射：防守行的 `V` 读成 `7`，凭空多一项）。
+                    m = re.search(r"(\d{2,3})", text)
+                if m and int(m.group(1)) <= PANEL_GAIN_MAX:
+                    best = int(m.group(1))
+                    break
+            out[name] = best
+        return out
+
+    def read_panel_gains(self, texts, subject):
+        """读六维面板上的「训练后增量」（`+N`），返回 `(主, 副)`。
+
+        主 = 点的那个科目（`subject`），副 = 另一个也有增量的属性。
+        **不要求主 ≥ 副**：同科目实测有 `39/14` 也有 `9/80`，大小关系不稳定。
+        任一值 > 200 视为 OCR 黏连（如「S+30」读成 303）。
+
+        归属优先按**同一行最近的属性名**（`panel_attr_of`），名字读不到时才用
+        固定 3×2 网格（`panel_cell`）。
+        """
+        if subject not in labels.TRAINING_SUBJECTS:
+            return None
+        # 首选：人工标注的框（行归属 100% 确定，红字只按颜色读）
+        by_boxes = self.panel_gains_by_boxes(subject, texts)
+        if by_boxes is not None:
+            return by_boxes
+        panel = self.texts_in_region(texts or [], "attr_gains")
+        names = [(t.name.strip(), t) for t in panel
+                 if t.name.strip() in labels.TRAINING_SUBJECTS]
+        # 首选：按颜色抠图后 OCR（红字压在「当前值/上限」上，文本会黏成 +80）
+        gains = self.panel_gain_values(texts)
+        if not gains:
+            # 兜底：颜色抠不出来时用文本正则（可能把上限尾数并进增量）
+            for t in panel:
+                text = t.name.replace(" ", "")
+                m = PANEL_GAIN_RE.search(text)
+                if not m:
+                    continue
+                v = int(m.group(1))
+                if v > PANEL_GAIN_MAX:
+                    continue
+                prefix = next((n for n in labels.TRAINING_SUBJECTS
+                               if text.startswith(n)), None)
+                name = prefix or self.panel_attr_of(t, names) or self.panel_cell(t)
+                if name is None:
+                    continue
+                gains[name] = max(gains.get(name, 0), v)
+        main = gains.get(subject)
+        if main is None:
+            return None
+        others = [v for k, v in gains.items() if k != subject]
+        sub = max(others) if others else 0
+        # **不再要求主 ≥ 副**（2026-11-16 实证）：同一个「弹跳」科目，
+        # 有的局弹跳 39 / 意识 14，有的局弹跳 9 / 意识 80 —— 谁大谁小取决于
+        # 当前值和加成，不是「面板没刷新」的信号。这条守卫会把正常的预览
+        # 判成旧帧丢掉（实测弹跳连丢两次）。判断刷新改用「和上一个科目不同 +
+        # 连续两拍一致」，见 `probe_subject`。
+        return main, sub
 
     def read_attribute_values(self, texts):
         """读底部六维面板的当前数值：`{属性名: 当前值}`，读不到的属性不出现。

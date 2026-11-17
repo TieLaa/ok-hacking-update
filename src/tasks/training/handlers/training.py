@@ -30,6 +30,11 @@ class TrainingHandlers:
     # 代价：每天多等一拍（≈0.5 秒）。换的是一次不可撤销的错误点击。
     HUB_SETTLE_TICKS = 1
 
+    # 位置需求属性的系数（用户 2026-11-16 口径）：乘在**最终分**上，1.1。
+    # 含义：愿意让 10% 的分数去练需求属性（10000 分的需求科目能压过 11000 分的普通科目）。
+    # 放最终分而不是基数，和放基数数学等价，只是只剩一处可调。
+    REQUIRED_GAIN_FACTOR = 1.1
+
     # 周六加训页（上一格「训练」、下一格「出行」）：点「训练」最多试几次。
     # 用户 2026-11-15 口径：「有就进，万一是意识训练还能回复一点精力，不行就退出来
     # 继续出行」——所以不看精力阈值，但点了没翻页（精力真不够时游戏不认）就改出行。
@@ -309,7 +314,7 @@ class TrainingHandlers:
         # 只有「今天还没出过行」时才等 —— 已经出过的日子不必为空等。
         if hub_seen < self.HUB_SETTLE_TICKS and not self.outing_used():
             self.log_info(f"训练日：头一拍先不决策（{reason}）→ 等「出行」按钮淡入")
-            self.sleep(0.5)
+            self.sleep(0.15)
             return True
         # 进休息室 = 训练日主界面出现。**只在这一刻**给监控页拍一次快照：
         # 六维 + 精力 + 零用钱（2026-11-03 用户口径）。
@@ -338,9 +343,9 @@ class TrainingHandlers:
                 if target is not None:
                     self.log_info("周六加训：没有「休息」按钮 → 出行")
             if target is not None:
-                self.click_box(target, after_sleep=0.6)
+                self.click_box(target, after_sleep=0.15)
             else:
-                self.flow_click("day_rest", after_sleep=0.6)
+                self.flow_click("day_rest", after_sleep=0.15)
         else:
             # 周六加训：「训练」在上一格（平时「休息」的位置，可能带彩框），
             # 按文字点它自己那个框；`day_train` 固定坐标是**下一格**，那天会点成「出行」。
@@ -469,7 +474,7 @@ class TrainingHandlers:
             if self.click_button("decide", after_sleep=0.6, must=False):
                 return True
 
-        fail = self.read_fail_rate(texts)
+        fail = self.read_fail_rate(texts, subject=self.current_subject(texts))
         if fail is None:
             # 科目页必有「失败率」（上面的前置判据就是它），读不到通常是页面淡入。
             # 这里只用来确认页面已经稳定；真正的「练还是休息」等所有科目探完再判。
@@ -505,9 +510,6 @@ class TrainingHandlers:
         current = self.current_subject(texts)
         candidates = [n for n in boxes
                       if n in with_team or n in ring_hit or n == current]
-        if self.stamina_gate_day(texts):
-            # 要「换下一个」就得先知道每个科目的训练后精力 → 这一天六项全测
-            candidates = list(boxes)
         self.log_info("候选科目（小人 " + ("、".join(with_team) if with_team else "无")
                       + "｜圈亮 " + ("、".join(ring_hit) if ring_hit else "无")
                       + "｜当前 " + (current or "无") + "）：" + "、".join(candidates))
@@ -519,13 +521,24 @@ class TrainingHandlers:
             results[current] = self.analyze_preview(texts, subject=current)
             results[current]["after"] = self.preview_stamina(texts)
             results[current]["fail"] = fail
+            # 当前科目不用点，面板本来就显示着它的增量 —— 也读出来参与排名。
+            # 不读的话它永远没有基数，预览再好也进不了 with_base（2026-11-17 实跑：
+            # 投射 3 队友 + 2 器材 = 5.0，却被排除，最后选了一个 3.0 的科目）。
+            base = self.read_panel_gains(texts, current)
+            if base is not None and (base[0] + base[1]) > 0:
+                results[current]["base_main"], results[current]["base_sub"] = base
+                self.dump_panel_crop(current)
             r = results[current]
+            base_info = ""
+            if r.get("base_main") is not None:
+                base_info = f"｜主{r['base_main']}+副{r['base_sub']}={r['base_main']+r['base_sub']}"
             self.log_info(
                 f"当前已选「{current}」：队友 {r['mates']}｜经理 {r['manager']}"
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
                 f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}"
                 f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}"
-                f"｜失败率 {r['fail'] if r['fail'] is not None else '?'}%")
+                f"｜失败率 {r['fail'] if r['fail'] is not None else '?'}%"
+                f"{base_info}")
 
         last_probed = None
         for name in candidates:
@@ -541,37 +554,26 @@ class TrainingHandlers:
             results[name] = self.probe_subject(box)
             last_probed = name
             r = results[name]
+            base_info = ""
+            if r.get("base_main") is not None:
+                base_info = f"｜主{r['base_main']}+副{r['base_sub']}={r['base_main']+r['base_sub']}"
             self.log_info(
                 f"探测「{name}」：队友 {r['mates']}｜经理 {r['manager']}"
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
                 f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}"
                 f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}"
-                f"｜失败率 {r.get('fail') if r.get('fail') is not None else '?'}%")
+                f"｜失败率 {r.get('fail') if r.get('fail') is not None else '?'}%"
+                f"{base_info}")
 
-        # 失败率是**每个科目各一个数**（2026-11-16 12:43 实跑：投射 8% / 弹跳 15%
-        # / 防守 20% / 运控 5% / 意识 0%）。旧版拿进页第一帧、也就是当前选中科目的
-        # 数字判「练还是休息」——12:47 首帧投射 96% 就直接退出去休息，意识（0%、
-        # 还能回精力）连探测都没探。现在探完所有候选再判：只排除超限的科目，
-        # **全部超限**才按配置强制休息。
+        # 失败率是每个科目各一个数。2026-11-17 起**不再用它筛候选池**：
+        # 分数排第一的科目失败率 > 上限就休息，不再为了「不浪费一天」
+        # 退而求其次去练一个低分科目（用户口径：不凑数）。
         fail_limit = int(self.config.get("失败率上限(%)"))
         probed = [n for n in candidates if n in results]
         fails = {n: results[n].get("fail") for n in probed}
-        allowed = self.subjects_within_fail(fails, fail_limit)
-        if probed and not allowed:
-            rates = "、".join(f"{n} {v if v is not None else '?'}%"
-                              for n, v in fails.items())
-            if self.config.get("失败率超限改休息"):
-                self._force_rest = True
-                self._force_reason = f"所有科目失败率都超过上限 {fail_limit}%"
-                self.log_warning(f"失败率全部超过上限 {fail_limit}%（{rates}）"
-                                 " → 退出科目页，回主界面休息")
-                # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
-                self.exit_page(after_sleep=0.8)
-                return True
-            self.log_warning(f"失败率全部超过上限 {fail_limit}%（{rates}，配置为不休息，继续）")
-        elif len(allowed) < len(probed):
-            skipped = "、".join(f"{n} {fails[n]}%" for n in probed if n not in allowed)
-            self.log_info(f"失败率超过上限 {fail_limit}% 的科目先排除：{skipped}")
+        if fails:
+            self.log_info("失败率：" + "、".join(
+                f"{n} {v if v is not None else '?'}%" for n, v in fails.items()))
 
         # 六维当前值：进休息室时已经拍过快照（`parsers.snapshot_lounge`），
         # 这里**优先用那一份**，只有独立调用（回归 / 不带主循环）时才现场补读一次。
@@ -587,47 +589,109 @@ class TrainingHandlers:
         caps = getattr(self, "_attr_caps", None) or {}
 
         def rank(name):
-            score = self.subject_score(results.get(name),
-                                       required=name in required)
-            return attributes.subject_priority(
+            """**兜底**：一个科目的面板基数都没读到时，用旧权重 + 缺口/减半规则。"""
+            r = results.get(name) or {}
+            score = self.subject_score(r, required=name in required)
+            pri = attributes.subject_priority(
                 score, attr_values.get(name), caps.get(name), boxes[name].y,
                 soft_cap=soft_cap, gap_limit=gap_limit)
+            if pri is None:                 # 缺口不足 → 排除（旧规则保留）
+                return None
+            return (0, *pri)
 
         # 候选池 = 小人 / 金边 / 彩边 / 当前已选（用户 2026-10-27：三种信号都算）
         # 但只保留**真正探测过**的科目：探测失败的名字没有分数，留在池里等于按 0 分
         # 跟别人比，还可能被选去盲点；一个都没探到时退回当前已选，别乱点。
-        # 失败率超限的科目先排除（`allowed` 为空时是「配置为不休息」，退回全部探到的）。
         pool = [n for n in candidates if n in results]
-        if allowed:
-            pool = [n for n in pool if n in allowed]
         if not pool:
+            if self.stamina_gate_day(texts):
+                self._force_rest = True
+                self._force_reason = "第4周周三：没有探测到任何候选"
+                self.log_warning("第4周周三：没有探测到任何候选 → 当天休息")
+                self.exit_page(after_sleep=0.15)
+                return True
             pool = [current] if current in boxes else list(boxes)
-        ranked = {n: rank(n) for n in pool}
-        ranked = {n: key for n, key in ranked.items() if key is not None}
+        # 两维归一化（用户 2026-11-16 设计）：
+        #   A. 基数维：`主+副`，按候选集 min-max 归一化（最差的 = 0，直接出局）；
+        #   B. 加成维：彩框 > 金框 > 有经理 > 人数，先排成名次再 min-max 归一化。
+        #   两者相乘取最大。各自归一化，避免「5 个队友 = 1 个彩框」这种量纲混用；
+        #   候选集变了分数会变，这是用户接受的（最差一档本来就是否决）。
+        # 基数维：除以**本次最大值**（0 = 真的 0 分，不是「今天最差」）——
+        # 用 min-max 会把最低项压成 0，那一项再怎么加成都是 0，等于直接出局。
+        def _ratio(values):
+            hi = max(values.values())
+            if hi <= 0:
+                return {n: 1.0 for n in values}
+            return {n: v / hi for n, v in values.items()}
+
+        with_base = [n for n in pool
+                     if (results.get(n) or {}).get("base_main") is not None]
+        if with_base:
+            gains = {}
+            for n in with_base:
+                r = results.get(n) or {}
+                gains[n] = (r.get("base_main") or 0) + (r.get("base_sub") or 0)
+            base_n = _ratio(gains)
+            # 加成维（2026-11-17 用户口径）：**不排名**，按旧权重的多维累加
+            # （队友/器材/经理/金框/彩框），再除以本次最大值折到 1~2。
+            # 真正全空（没队友没经理没器材没框）才是 0 → ×1.0；
+            # 最强的一档 → ×2.0，中间按绝对分线性分摊，不随候选集“被抬分”。
+            raw_bonus = {n: self.subject_score(results.get(n) or {}) for n in with_base}
+            hi_bonus = max(raw_bonus.values()) if raw_bonus else 0.0
+            bonus_n = {n: (1.0 + raw_bonus[n] / hi_bonus if hi_bonus > 0 else 1.0)
+                       for n in with_base}
+            ranked = {}
+            for n in with_base:
+                value = base_n[n] * bonus_n[n]
+                # 需求属性乘在**最终分**上（用户 2026-11-16 口径）：和乘在基数上
+                # 数学等价，但只看一处、好调。1.1 = 愿意让 10% 的分。
+                if n in required:
+                    value *= self.REQUIRED_GAIN_FACTOR
+                ranked[n] = (value, gains[n], -boxes[n].y)
+            self.log_debug("选科目打分：" + "、".join(
+                f"{n}{'*' if n in required else ''}="
+                f"{gains[n]}(基数{base_n[n]:.2f}×加成{bonus_n[n]:.2f}"
+                f"{'×需求' + str(self.REQUIRED_GAIN_FACTOR) if n in required else ''})"
+                for n in sorted(ranked, key=ranked.get, reverse=True)))
+        else:
+            ranked = {n: rank(n) for n in pool}
+            ranked = {n: key for n, key in ranked.items() if key is not None}
         if not ranked:
             self.log_warning("六维都接近上限，没有可练的科目 → 按原顺序选")
             ranked = {n: (self.subject_score(results.get(n)), 0, 0)
                       for n in pool}
         name = max(ranked, key=ranked.get)
-        # 2026-11-15 用户口径：第4周周三要保住周四那一练（精力低于休息阈值就练不了），
-        # 所以按权重顺序挑第一个「训练后精力 ≥ 休息阈值」的科目，不够就换下一个。
-        # 预测值来自科目页顶栏（`parsers.preview_stamina`），是游戏自己算的，不是估的。
+        # 失败率只卡**第一名**（2026-11-17 用户口径）：分数最高的科目超限就休息，
+        # 不再为了「不浪费一天」退而求其次去练低分科目。
+        top_fail = (results.get(name) or {}).get("fail")
+        if top_fail is None or top_fail > fail_limit:
+            rates = "、".join(f"{n} {v if v is not None else '?'}%"
+                              for n, v in fails.items())
+            shown = top_fail if top_fail is not None else "?"
+            if self.config.get("失败率超限改休息") or self.stamina_gate_day(texts):
+                self._force_rest = True
+                self._force_reason = (f"最优科目「{name}」失败率 {shown}%"
+                                      f" 超过上限 {fail_limit}%")
+                self.log_warning(f"{self._force_reason}（{rates}）"
+                                 " → 退出科目页，回主界面休息")
+                # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
+                self.exit_page(after_sleep=0.15)
+                return True
+            self.log_warning(f"最优科目「{name}」失败率 {shown}%"
+                             f" 超过上限 {fail_limit}%（配置为不休息，继续）")
+        # 第4周周三（精力阈值保周四那一练）：第一名还要满足「训练后精力 ≥ 阈值」，
+        # 不满足就休息，**不换第二名**（换人就是凑数）。
         if self.stamina_gate_day(texts):
             limit = self.rest_threshold("三")
-            after = {n: (results.get(n) or {}).get("after") for n in ranked}
-            picked = self.pick_by_stamina(ranked, after, limit)
-            if picked is None:
-                self.log_warning(
-                    f"第4周周三：所有科目训练后都 < {limit} 精力 → 今天休息")
+            after = (results.get(name) or {}).get("after")
+            if after is None or after < limit:
+                shown = after if after is not None else "?"
                 self._force_rest = True
-                self._force_reason = f"第4周周三：所有科目训练后都 < {limit} 精力"
-                self.exit_page(after_sleep=0.8)
+                self._force_reason = (f"第4周周三：「{name}」训练后精力 {shown}"
+                                      f" < {limit}")
+                self.log_warning(f"{self._force_reason} → 退出去休息")
+                self.exit_page(after_sleep=0.15)
                 return True
-            if picked != name:
-                self.log_info(
-                    f"第4周周三：「{name}」训练后 {after.get(name)} < {limit}"
-                    f" → 改选「{picked}」（{after.get(picked)}）")
-            name = picked
         r = results.get(name) or self.empty_preview()
         # 2026-10-27：这一行必须同时打「金框」和「彩虹」。
         # 代码里彩框会让金框恒为 0（互斥），只打金框时彩框会被统计成「无框」，
@@ -650,9 +714,9 @@ class TrainingHandlers:
         if name != selected:
             box = self.find_subject_box(name)
             if box is not None:
-                self.click_box(box, after_sleep=0.45)
+                self.click_box(box, after_sleep=0.3)
 
-        if not self.click_button("decide", after_sleep=0.8, must=False):
+        if not self.click_button("decide", after_sleep=0.6, must=False):
             box = self.find_subject_box(name)
             if box is not None:
                 self.click_box(box, after_sleep=0.6)
@@ -946,6 +1010,9 @@ class TrainingHandlers:
                 # 所以**只认真的发出去的点击**：`_last_click_at` 只在点击完成时更新。
                 before = getattr(self, "_last_click_at", 0.0)
                 self.log_info(f"憋气难度页：选 {minutes} 分钟那档（时长最长）@({x},{y})")
+                # 卡片淡入：这一拍 OCR 已经读到卡，但按钮还在滑入，点早了会点空
+                # （2026-11-17 实跑：进来第一拍没点中左边金卡，之后一直空点确定）。
+                self.sleep(0.05)
                 self.click(x, y, after_sleep=0.5)
                 picked = getattr(self, "_last_click_at", 0.0) != before
                 if not picked:
@@ -954,6 +1021,15 @@ class TrainingHandlers:
                 return True
             self.log_warning(f"憋气难度页：认不出「N分钟」卡片 → 直接点确定"
                              f"（读到 {[t.name.strip() for t in texts][:6]}…）")
+        # 连点两次「确定」还在这页：说明卡片其实没选中（第一拍点空），
+        # 重置 `_breath_picked` 重新选一次，别一直空点。
+        confirms = getattr(self, "_breath_confirms", 0)
+        if confirms >= 2 and getattr(self, "_breath_picked", False):
+            self._breath_picked = False
+            self._breath_confirms = 0
+            self.log_warning("憋气难度页：确定点了两次没反应 → 重新选卡")
+            return True
+        self._breath_confirms = confirms + 1
         if self.click_button("confirm", texts=texts, after_sleep=0.9, must=False):
             self.log_info("憋气难度页：确定")
             return True

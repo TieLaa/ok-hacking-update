@@ -556,8 +556,9 @@ class WeekendHandlers:
         self.mark_visited("步行街")
         self.mark_tried()
         # 探卡池（所有流派出行日的第一步）：只买「笔记继承 / 球员位置」的彩色版本，
-        # 其他卡一张不买（用户 2026-11-15）。`handle_weekend` 点「步行街」时
-        # 把带 probe=True 的 WeekendStep 写进 current_step。
+        # 其他卡一张不买（用户 2026-11-15）。买到一张目标卡后这一趟转正常逻辑
+        # （2026-11-17 用户口径，见下面 `key` 分支）。`handle_weekend` 点「步行街」
+        # 时把带 probe=True 的 WeekendStep 写进 current_step。
         probe = bool(getattr(self._ensure_day().current_step, "probe", False))
         if not cards:
             self.log_warning("扭蛋：" + ("探卡池" if probe else "三张卡都没认出来")
@@ -584,6 +585,7 @@ class WeekendHandlers:
             caps=getattr(self, "_attr_caps", None) or {},
             gap_limit=int(self.config.get("缺口排除阈值")),
             week=bar.get("week"),
+            day=bar.get("day"),
             allow_others=not probe)
         if best is None:
             if probe:
@@ -609,6 +611,11 @@ class WeekendHandlers:
             key = street.top_gacha_key(best["name"])
             if key:
                 self.top_gacha_got().add(key)
+                # 探卡池买到目标卡 → 这一趟的目的已完成，后面「再买一次」
+                # 页走正常逻辑继续买（2026-11-17 用户口径）。
+                st = self._ensure_day()
+                if getattr(st.current_step, "probe", False):
+                    st.current_step = st.current_step._replace(probe=False)
                 self.log_info(f"扭蛋：目标卡「{key}」已到手"
                               f"（{len(self.top_gacha_got())}/{len(street.TOP_GACHA_NAMES)}）")
         else:

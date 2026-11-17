@@ -18,7 +18,8 @@
 
     0. **「笔记继承 / 球员位置」的彩色版本永远第一**（用户 2026-11-15 口径）：
        压过零用钱卡和品质分。所有流派的出行日都先进步行街找它们
-       （`places/map.py: gacha_probe`），探卡池时也只买这两张；
+       （`places/map.py: gacha_probe`），探卡池时只买这两张；
+       买到一张后这一趟转正常购买逻辑继续买（用户 2026-11-17 口径）；
     1. 品质优先级 **彩色 > 金色 > 紫色**（彩色是训练等级提升后解锁的最高品质）；
        蓝色、其他一律不买（宁可退出）；
     2. 同等情况下**先「增强款」，再有队友加成的，然后才是恢复精力的**
@@ -36,7 +37,9 @@
        之后不能再从训练中获得该属性。前期买等于封掉一门训练 → **第 7 周
        （赛季最后一周）之前不买**。名单只列六维（`SURGE_NAMES`），
        「熟练度暴涨」是器材熟练度、不属于这一类，不要改成泛匹配「暴涨」；
-    6. 没有合格卡就退出，不点确定。
+    6. 两张目标卡没齐之前，**非目标卡要买完还剩 120** 才买（用户 2026-11-17
+       口径）—— 留着买下一张「笔记继承 / 球员位置」，正常模式同样生效；
+    7. 没有合格卡就退出，不点确定。
 
 历史事故（都写在这里，避免又被改坏）：
 
@@ -77,7 +80,8 @@ SURGE_NAMES = tuple(f"{a}暴涨" for a in labels.TRAINING_SUBJECTS)
 
 # 「笔记继承」「球员位置」：用户 2026-11-15 口径 —— 彩色版本是**全局第一优先**，
 # 压过零用钱卡和品质分。所有流派的出行日都先进步行街找它们；
-# 探卡池模式（`allow_others=False`）下只买这两张，其他卡一张都不买。
+# 探卡池模式（`allow_others=False`）下只买这两张（其他彩卡可用闲钱）；
+# 买到一张后 `handle_street` 把这一趟切正常逻辑（2026-11-17 用户口径）。
 TOP_GACHA_NAMES = ("笔记继承", "球员位置")
 
 
@@ -155,7 +159,7 @@ class StreetPlace:
 
     def gacha_candidates(self, cards, stamina, stamina_max, money,
                          required=None, attrs=None, caps=None, gap_limit=100,
-                         week=None, allow_others=True):
+                         week=None, day=None, allow_others=True):
         """三张卡里哪些值得买、买哪张。
 
         返回 (best, detail, all_cards)：
@@ -164,8 +168,10 @@ class StreetPlace:
         - `all_cards` 是全部三张（不管买不买）
 
         `allow_others=False` = **探卡池模式**（用户 2026-11-15 口径）：
-        今天本来不该进步行街，只为「笔记继承 / 球员位置」来的，
-        其他卡一张都不买；买没买到都退出，回地图走原计划。
+        今天本来不该进步行街，只为「笔记继承 / 球员位置」来的；
+        其他卡只有彩色版能用闲钱买（留够 120）。买到一张目标卡后
+        `handle_street` 把这一趟切成正常模式（2026-11-17 用户口径）。
+        没买到就退出，回地图走原计划。
 
         参数里 `stamina` / `money` / `week` 可能是 None（读不到）——
         读不到零用钱或价格时**不买**（买不起点「确定」游戏不扣钱、页面也不关，
@@ -245,10 +251,14 @@ class StreetPlace:
         ok = []
         # 探卡池要留的零花钱：和商店同一条储备线（`shop.keep_money_before_last_day`），
         # 钱留给「笔记继承 / 球员位置」。
-        probe_reserve = int(params.shop.keep_money_before_last_day)
+        # 2026-11-17 用户口径：第 7 周**周六起**不再留 —— 最后一次出行就在周六，
+        # 再留也买不到下一张，反而挡住当天的金/彩卡。
+        no_reserve = (week == SHOP_SEASON_WEEKS and day in ("六", "日"))
+        probe_reserve = 0 if no_reserve else int(params.shop.keep_money_before_last_day)
         # 两张目标卡**都到手之后**就不用再留了（用户 2026-11-15 口径）。
         got = self.top_gacha_got()
-        need_reserve = any(key not in got for key in TOP_GACHA_NAMES)
+        need_reserve = (not no_reserve) and any(
+            key not in got for key in TOP_GACHA_NAMES)
         for c in cards:
             # 探卡池模式（用户 2026-11-15 口径）：
             #   - 目标卡「笔记继承 / 球员位置」的彩色版：照买；
@@ -316,6 +326,13 @@ class StreetPlace:
             # 买不起就跳过，看下一张（2026-10-26：零用钱 50、卡片 60，
             # 旧代码照样点确定 → 停留在扭蛋页反复点）。
             if money is not None and c["price"] > money:
+                continue
+            # 正常模式也留 120（用户 2026-11-17 口径）：探卡池买到目标卡会
+            # 转成正常逻辑继续买，不能把留给另一张目标卡的钱花掉。
+            if (allow_others and need_reserve and not is_top_gacha(c)
+                    and money is not None
+                    and money - c["price"] < probe_reserve):
+                c["reject"] = f"要留 {probe_reserve} 给笔记继承/球员位置"
                 continue
             c["score"] = score(c)
             # 属性子档（参考商店 `shop.pick_shop_item` 的 attr_sub）：
