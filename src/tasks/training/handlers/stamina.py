@@ -14,6 +14,7 @@
 """
 
 from src.tasks.training import pages as page_registry
+from src.tasks.training.constants import STAMINA_SESSION_COST
 from src.tasks.ui import Defs, labels
 
 import re
@@ -226,7 +227,7 @@ class StaminaHandlers:
         | 怎么进来的 | 目标 |
         |---|---|
         | 「训练所需专注还差 N」弹窗（`_stamina_need = N`） | 当前 + N |
-        | 大厅主动补（`ensure_stamina`，专注 < `恢复专注下限`） | 补到 `恢复专注下限` |
+        | 大厅主动补（`ensure_stamina`，专注 < 30） | 补到开一局所需 30 |
         | 兜底（两种情况都没记） | 补满 |
 
         数值来源优先**顶栏**（`top_bar` 自带专注条像素兜底）；页面上那个大数字
@@ -243,7 +244,7 @@ class StaminaHandlers:
         if need:
             target = min(mx, cur + int(need))
         else:
-            floor = int(self.config.get("恢复专注下限") or 0)
+            floor = STAMINA_SESSION_COST
             target = min(mx, max(floor, 0))
         return max(0, target - cur)
 
@@ -295,7 +296,7 @@ class StaminaHandlers:
     def ensure_stamina(self, need=None):
         """专注低于 `need` 就主动点「+」进恢复页。返回 True = 这一拍去补了。
 
-        - `need` 省略时用配置 `恢复专注下限`（默认 30）；
+        - `need` 省略时用开一局所需 `STAMINA_SESSION_COST`（30）；
         - 只在**大厅 / 训练剧本**这类「顶栏有 +」的页面生效：训练内的顶栏
           药丸没有「+」（`parsers.stamina_plus_point` 会返回 None → 这里直接放弃），
           免得在科目页瞎点；
@@ -312,10 +313,10 @@ class StaminaHandlers:
         if cur is None or mx is None:
             return False
         if need is None:
-            need = int(self.config.get("恢复专注下限") or 0)
+            need = STAMINA_SESSION_COST
         if cur >= need:
             return False
-        self._stamina_need = None        # 主动补：目标 = 恢复专注下限（不是补满）
+        self._stamina_need = None        # 主动补：目标 = 开一局所需 30（不是补满）
         if not self.open_stamina_recover():
             return False
         self.log_info(f"专注 {cur}/{mx} < {need} → 主动进专注恢复页")

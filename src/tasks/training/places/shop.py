@@ -39,6 +39,7 @@ from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK,
                                           SHOP_STAMINA_ITEMS,
                                           SHOP_STAMINA_UNKNOWN_ASSUME,
                                           SHOP_TRAINING_WEEKDAYS)
+from src.tasks.training.strategy import styles
 from typing import NamedTuple
 
 
@@ -385,7 +386,7 @@ class ShopPlace:
         """
         if not self.style_known:
             return True
-        return self.style in ("扭蛋流", "小游戏流")
+        return styles.style_spec(self.style).saves_money
 
     def shop_targets(self):
         """本局要重点买的科目/属性集合；None = 不筛选（目前默认）。

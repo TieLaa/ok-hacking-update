@@ -9,6 +9,7 @@ import time
 from src.tasks.training import params
 from src.tasks.training.handlers.match import new_match_flags
 from src.tasks.training.queue import CaptainQueue
+from src.tasks.training.strategy import styles
 from src.tasks.ui import labels
 from src.util.emergency_stop import STOP
 from src.util.log_fallback import ensure_run_log
@@ -96,6 +97,10 @@ def _stall_limits():
 
 
 class TrainingFlowMixin:
+
+    # 无队长时是否拦开局（2026-10-31 用户口径：默认拦，2026-11-18 起不暴露成配置）。
+    # 回归桩（FakeTask / DryRunTask）把它设成 False，否则空队长会触发「只跑已有局」闸门。
+    NO_CAPTAIN_GUARD = True
 
     def input_blocked(self):
         """输入层每一下动作前会问一次：现在该不该动手（True = 别动）。
@@ -226,7 +231,7 @@ class TrainingFlowMixin:
             # 2026-11-17：当前就在已知流程页（确认编队 / 训练日首页 / 素材页…）时
             # **不要先回大厅** —— 那些页面没有返回入口，recover_to_lobby 只会连点
             # 返回箭头 + ESC，把「确认编队」这种只差一步开练的页面搅乱。
-            # 用户实测：勾了「允许开始训练」后点开始，机器人却在确认编队页点返回。
+            # 用户实测：在确认编队页点开始，机器人却在那一页点返回、不进训练。
             if self.is_startable():
                 self.log_info("GUI 运行：当前是已知流程页 → 就地继续（不回大厅）")
             elif not self.recover_to_lobby():
@@ -286,7 +291,7 @@ class TrainingFlowMixin:
         interval = float(self.config.get("操作间隔(秒)"))
         # 卡住判据（用户 2026-11-04 的**两条**口径，都做成「立刻接管」）：
         #   ① 点击后 `点击无响应判定(秒)`（默认 3 秒）界面没变化；
-        #   ② 同一天点击超过 `单日最大点击数`（默认 100）下。
+        #   ② 同一天点击超过 `单日最大点击数`（默认 50）下。
         # 见 flow.stuck_takeover。
         self.reset_day_home()
         self._sig_changed_at = time.time()
@@ -359,15 +364,15 @@ class TrainingFlowMixin:
                 self._last_click_at = 0.0
             self._tick_at = now
 
+            # 同一天计数器：读到新日期就归零（用户口径：「日期更新以后计数器重置」）
+            self.day_counter_step(texts)
+
             # 界面指纹：同一页面每拍都一样；用于 ①「3 秒无响应」判据 ② unknown 存证限流
             sig = self._signature(texts)
             changed = sig != last_sig
             if changed:
                 last_sig = sig
                 self._sig_changed_at = time.time()
-
-            # 同一天计数器：读到新日期就归零（用户口径：「日期更新以后计数器重置」）
-            self.day_counter_step(texts)
 
             # ---- 卡住就**立刻接管**（用户 2026-11-04 两条口径）----
             # ① 点击后 3 秒界面没变化；② 同一天点击超过 100 下。
@@ -831,7 +836,7 @@ class TrainingFlowMixin:
     #
     #   判据①「点击无响应判定(秒)」=3：界面指纹超过 3 秒没变、而且这段时间里**点过**
     #        → 点了没反应（不是干等动画）→ 立刻接管；
-    #   判据②「单日最大点击数」=100：同一天累计点击超过 100 下还没换天 → 立刻接管。
+    #   判据②「单日最大点击数」=50：同一天累计点击超过 50 下还没换天 → 立刻接管。
     #        **日期一更新就归零**（`day_counter_step`），正常的一天碰不到。
     #
     # 「接管」= 存证 logs/debug/ + 清掉当天拦路标记 + 点屏幕中央继续推进，**不**停任务；
@@ -859,6 +864,9 @@ class TrainingFlowMixin:
                     f"（上一天点击 {getattr(self, '_day_clicks', 0)} 下 / "
                     f"接管 {getattr(self, '_day_fixes', 0)} 次）")
             self._day_key = key
+            # 换天=新的训练日主界面。_hub_ticks 是「这页已经看到第几拍」，
+            # 不清零会让第一天的一拍被当成“不是第一拍”，直接在半黑画面上决策。
+            self._hub_ticks = 0
             self._day_clicks = 0
             self._day_fixes = 0
         return key
@@ -907,7 +915,7 @@ class TrainingFlowMixin:
         key = getattr(self, "_day_key", None)
         tag, why = None, ""
         noresp = float(self.config.get("点击无响应判定(秒)") or 3)
-        click_limit = max(1, int(self.config.get("单日最大点击数") or 100))
+        click_limit = max(1, int(self.config.get("单日最大点击数") or 50))
         changed_at = getattr(self, "_sig_changed_at", 0.0)
         clicked_at = getattr(self, "_last_click_at", 0.0)
         idle = time.time() - changed_at
@@ -1053,7 +1061,8 @@ class TrainingFlowMixin:
 
         失败时只记 debug，绝不影响主流程。
         """
-        from src.tasks.training.pages import classify_page      # 局部导入，避开导入环
+        from src.tasks.training.pages import (classify_page,      # 局部导入，避开导入环
+                                              only_expected_overlaps)
 
         try:
             page, candidates = classify_page(self, texts)
@@ -1065,7 +1074,8 @@ class TrainingFlowMixin:
         if page != prev:
             self.log_info(f"页面分类：{prev or '?'} → {page or 'unknown'}"
                           f"（候选 {list(candidates)}）")
-        elif len(candidates) > 1 and candidates != getattr(self, "_page_conflict", ()):
+        elif (len(candidates) > 1 and candidates != getattr(self, "_page_conflict", ())
+              and not only_expected_overlaps(page, candidates)):
             self.log_warning(f"页面分类冲突：{list(candidates)} → 暂取 {page}")
         self._page_conflict = candidates
         return page
@@ -1082,7 +1092,7 @@ class TrainingFlowMixin:
         # 顺序遍历里沉淀了踩坑的教训（「共用『下一步/确定』的必须排在专属
         # handler 之后」），所以分类器只当**加速器**，绝不排除任何 handler ——
         # 最坏情况 = 现在的行为（多跑几个 handler 的判据而已）。
-        if page is not None and self.config.get("页面分类路由"):
+        if page is not None:
             for first in self._routed_handlers(page):
                 if self._try_handler(first, texts, frame):
                     return True
@@ -1140,13 +1150,13 @@ class TrainingFlowMixin:
 
     @property
     def no_captain_mode(self):
-        """无队长模式：这次 run 没有「指定队长」（队列参数也算）且开关打开。
+        """无队长模式：这次 run 没有「指定队长」（队列参数也算）。
 
         用户 2026-10-31 口径：取消勾选队长 = 不接开局，只跑已经手动开好的局。
-        开关 `无队长不接开局` 默认 True；回归桩（tools/check_handlers.py）关掉它，
-        这样测试仍然按旧的「自动选第一个」流程跑。
+        2026-11-18：不再暴露成配置，**默认永远拦**（内部常量 `NO_CAPTAIN_GUARD`）；
+        回归桩把它设成 False，这样测试仍然按旧的「自动选第一个」流程跑。
         """
-        if not self.config.get("无队长不接开局"):
+        if not self.NO_CAPTAIN_GUARD:
             return False
         return not self.configured_captain()
 
@@ -1293,17 +1303,15 @@ class TrainingFlowMixin:
         2026-11-17 用户口径：周四硬阈值 60 → 50（与基础阈值相同，等于周四
         不再比平时早休息 10 点）。
         用户 2026-11-04：**扭蛋流 / 小游戏流**在周四有硬阈值 **50**
-        （`rest.thursday_threshold_by_style`，取代旧的「周二 65」）；**其它流派
+        （`rest.thursday_threshold` + `Style.thursday_rest`，取代旧的「周二 65」）；**其它流派
         （训练流 / 商店流）周四没有特殊限制**，只遵守策略参数
         `rest.stamina_threshold`（`strategy/params.json`）。
         周二现在没有任何特殊阈值（旧的周二 65 / 周二 60 已删除）。
         有硬阈值时取 max(策略参数, 硬阈值)，参数调高时以参数为准。
         """
         base = int(params.rest.stamina_threshold)
-        if day == "四":
-            hard = params.rest.thursday_threshold_by_style.get(self.style)
-            if hard is not None:
-                return max(base, hard)
+        if day == "四" and styles.style_spec(self.style).thursday_rest:
+            return max(base, int(params.rest.thursday_threshold))
         return base
 
     def stamina_gate_day(self, texts=None):

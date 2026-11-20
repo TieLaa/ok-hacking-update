@@ -11,7 +11,7 @@ import re
 import time
 
 from src.tasks.ui import labels
-from src.tasks.training import attributes, roster
+from src.tasks.training import attributes, params, roster
 from src.tasks.training.constants import SHOP_SEASON_WEEKS
 from src.tasks.training.places import activities
 from src.tasks.training.places import street
@@ -259,8 +259,8 @@ class WeekendHandlers:
             required=attributes.required_attrs(info.get("position")),
             attrs=dict(self.info.get("attrs") or {}),
             caps=getattr(self, "_attr_caps", None) or {},
-            soft_cap=int(self.config.get("属性减半门槛")),
-            gap_limit=int(self.config.get("缺口排除阈值")))
+            soft_cap=int(params.attributes.soft_cap),
+            gap_limit=int(params.attributes.gap_limit))
         if pick is None:
             self.log_info(f"商店：{reason}，关店")
             self.finish_shop(texts)
@@ -583,7 +583,7 @@ class WeekendHandlers:
             required=attributes.required_attrs(info.get("position")),
             attrs=dict(self.info.get("attrs") or {}),
             caps=getattr(self, "_attr_caps", None) or {},
-            gap_limit=int(self.config.get("缺口排除阈值")),
+            gap_limit=int(params.attributes.gap_limit),
             week=bar.get("week"),
             day=bar.get("day"),
             allow_others=not probe)
@@ -661,7 +661,7 @@ class WeekendHandlers:
             required=attributes.required_attrs(info.get("position")),
             attrs=dict(self.info.get("attrs") or {}),
             caps=getattr(self, "_attr_caps", None) or {},
-            gap_limit=int(self.config.get("缺口排除阈值")))
+            gap_limit=int(params.attributes.gap_limit))
         if pick is None:
             self.log_warning(f"游戏厅：{reason}，退出")
             self.exit_page()
@@ -777,13 +777,12 @@ class WeekendHandlers:
     def handle_weekend(self, texts):
         """出行地图（周末 + 训练日的额外出行）：去今天该去的地点。
 
-        用户 2026-10-29 / 2026-11-10 / 2026-11-11 口径
-        （见 constants.WEEKEND_PLAN / WEEKEND_MAIN_PLACE 和
-        `places/map.py: training_weekend_places`）：
-        - **训练流**：按精力缺口选动作 ——
-          缺口 ≥ 周末划船缺口（30）→ 公园（缺口 ≥ 周末野餐缺口 70 野餐，
-          否则划船）；缺口 < 30 → 餐厅打工（零用钱留给商店的牛奶/秘籍，
-          不去步行街/游戏厅）；缺口读不到 → 回退「餐厅 → 公园」；
+        用户 2026-10-29 / 2026-11-10 / 2026-11-11 / 2026-11-17 口径
+        （见 `strategy/styles.py` 的 `weekend_places`）：
+        - **训练流**：按精力缺口选动作（缺口 = 上限−当前）——
+          缺口 < 30 → 餐厅 → 公园；缺口 ≥ 30 的周六 → 餐厅 → 公园
+          （单卡队友 <3 人就退出餐厅回公园）；缺口 ≥ 30 的周日 → 公园；
+          第 7 周周六 · 钱 >120 → 步行街 → 餐厅；缺口读不到 → 餐厅 → 公园；
         - **商店流**：周六/周日去餐厅打工；
         - **扭蛋流 / 小游戏流**：候选固定「主地点 + 餐厅」，**与星期无关**
           （2026-11-10：训练日的额外出行日也走同一条门槛）——

@@ -201,9 +201,11 @@ MATCH_TEXTS = ("比赛", "VS")
 # 锦标赛对阵图（关卡列表页）的标记：handlers/match.py 与 pages.py 共用。
 # 这一页只有「下一步」和学校名，没有「结算/赛程」这种整词标题。
 STAGE_LIST_MARKS = ("赛程已完成", "距离下场比赛", "挑战中")
-# 「比赛日处理」下拉的三个选项：training/config_spec.py 与 QuickMatchTask.py 共用。
+# 「比赛日处理」下拉的选项：training/config_spec.py 与 QuickMatchTask.py 共用。
+# 2026-11-18：「总是跳过」没有实现（跳不了仍会进比赛，和「自动」一样），
+# 从下拉里隐藏；旧存档值由 config_spec.LEGACY_VALUES 落到「自动」。
 MATCH_DAY_OPTIONS = ("自动（先跳过，跳不了就进比赛加速）",
-                     "总是跳过", "总是进比赛（外部战斗脚本）")
+                     "总是进比赛（外部战斗脚本）")
 POPUP_TEXTS = ("确认", "关闭", "取消", "跳过", "领取", "继续", "今日不再提示")
 SPEED_TEXTS = ("快进", "倍速", "自动", "手动")
 

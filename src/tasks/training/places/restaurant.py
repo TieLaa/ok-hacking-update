@@ -27,7 +27,9 @@
 
 import re
 
-from src.tasks.training.constants import SHOP_SEASON_WEEKS, WORK_STAMINA_COST
+from src.tasks.training.constants import WORK_STAMINA_COST
+from src.tasks.training.strategy import styles
+from src.tasks.training.strategy.context import WorkContext
 from src.tasks.ui import labels
 
 # 地点名（地图上的按钮文字 / 状态里的键）
@@ -89,12 +91,17 @@ class RestaurantPlace:
         # 「没有可选的卡」的退出路径，交回地图决定下一步；周日精力花光没法补，
         # 那天根本不会走到这里（map.py 直接选另一个地点）。
         # 急招插队趟不看这条（双倍工资本身就不亏）。
-        if (allow_fallback and self.style == "训练流"
-                and self.current_day()[0] < SHOP_SEASON_WEEKS
-                and (self.weekend_gap() or 0) >= int(self.config.get("周末划船缺口"))
-                and counts and max(counts) < 3):
-            self.log_info(
-                f"餐厅：两张卡分散（{counts}），最高 <3 人 → 普通工资不划算，退出餐厅")
+        ctx = WorkContext(
+            style=self.style,
+            allow_fallback=allow_fallback,
+            week=self.current_day()[0],
+            gap=self.weekend_gap() or 0,
+            row_gap=int(self.config.get("训练流-周末划船缺口")),
+            mate_counts=tuple(counts),
+        )
+        ok, why = styles.style_spec(self.style).accept_work_card(ctx)
+        if not ok:
+            self.log_info(why)
             return ()
         if not allow_fallback:
             # 插队趟（因地图急招才进餐厅）：**只认急招卡**。

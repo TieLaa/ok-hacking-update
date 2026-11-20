@@ -98,6 +98,20 @@ PRIORITY = {
     "rest_confirm": 136,
 }
 
+# 有意的「包含关系」：优先页本身就会包含后者，不是两个页面都判错。
+# 这些重叠不报 warning；新出现的、不在表里的重叠才报。
+EXPECTED_OVERLAPS = {
+    frozenset(("register_player", "result")),
+    frozenset(("match_result", "popup")),
+    frozenset(("park", "park_detail")),
+}
+
+
+def only_expected_overlaps(page, candidates):
+    """候选里除 `page` 外，是否每一条都在 EXPECTED_OVERLAPS 里。"""
+    return all(c == page or frozenset((page, c)) in EXPECTED_OVERLAPS
+               for c in candidates)
+
 
 def _short_place_names(texts):
     """地图上的整框地点名（允许「公园+」这种带加号的短标签）。"""

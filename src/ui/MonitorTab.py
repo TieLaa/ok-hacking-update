@@ -351,7 +351,7 @@ class MonitorTab(CustomTab):
             "task_hint": info.get("task_hint") or "自动训练",
             "match_countdown": info.get("match_countdown") or MISSING,
             "weekend_plan": info.get("weekend_plan") or MISSING,
-            "picnic_threshold": config.get("周末野餐缺口", MISSING),
+            "picnic_threshold": config.get("训练流-周末野餐缺口", MISSING),
             "buy_strategy": config.get("商店购买策略", MISSING),
             "shop_today": info.get("shop_today") or "否",
             "fail_rate": info.get("fail_rate") or info.get("当前失败率") or MISSING,

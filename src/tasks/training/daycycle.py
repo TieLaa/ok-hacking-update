@@ -30,9 +30,10 @@
 import time
 
 from src.tasks.ui import Defs, labels
-from src.tasks.training import params
 from src.tasks.training.constants import (SHOP_ENTRY_TRIES,
                                           SHOP_SEASON_WEEKS)
+from src.tasks.training.strategy import styles
+from src.tasks.training.strategy.context import RestContext
 
 
 class DayState:
@@ -185,12 +186,11 @@ class DayCycleMixin:
             self._force_rest = False
             return "休息", f"强制休息（{getattr(self, '_force_reason', '') or '见上一条日志'}）"
         # 周四硬阈值：扭蛋流 / 小游戏流低精力休息 → 周五才进得去出行地图。
-        if (day == "四" and cur is not None
-                and params.rest.thursday_threshold_by_style.get(self.style) is not None):
-            limit = self.rest_threshold(day)
-            if cur < limit:
-                return "休息", (f"周四 {self.style} 精力 {cur} < {limit}"
-                                "（低精力休息，保周五出行地图）")
+        ctx = RestContext(style=self.style, day=day, stamina=cur,
+                          threshold=self.rest_threshold(day))
+        rest, why = styles.style_spec(self.style).should_rest(ctx)
+        if rest:
+            return "休息", why
         return "训练", f"进入训练科目（精力 {cur if cur is not None else '?'}，失败率在科目页判）"
 
     # ---------- 一天的入口 ②：出行前（跟队长说话那页） ----------

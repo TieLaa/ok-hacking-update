@@ -9,7 +9,7 @@ import time
 
 from ok.feature.Box import Box
 
-from src.tasks.training import attributes, page_signatures, roster
+from src.tasks.training import attributes, page_signatures, params, roster
 from src.tasks.ui import labels
 from src.tasks.ui import zoom_reread
 
@@ -165,12 +165,24 @@ class TrainingHandlers:
         if self.match_text(texts, labels.VACATION_TEXTS) is None:
             return False
 
+        # 底部成行黄框 = **通用事件页**（合宿事件这种「两张黄卡片」）。
+        # 用户 2026-11-20 口径：这类页面归 `handle_event_choice` 统一处理，
+        # 不要一个事件一个 handler。这里只放行，让全量遍历轮到它。
+        group, _kind = self._yellow_choice_group()
+        if len(group) >= 2:
+            return False
+
         confirm = self.match_text(self._ocr_region("confirm"), labels.CONFIRM_TEXTS)
         if confirm is not None:
             self.click_box(confirm, after_sleep=0.5)
             self.log_info("度假：决定")
             return True
-        if self.click_text(("开始训练", "出发", "训练"), after_sleep=0.5, must=False):
+        # 按钮必须**整词**：旁白「合宿训练恰逢…交叉训练」里也有「训练」，
+        # 子串匹配会点到旁白上（2026-11-20 实跑，页面 3 秒没变化）。
+        button = next((t for t in texts
+                       if t.name.strip() in ("开始训练", "出发", "训练")), None)
+        if button is not None:
+            self.click_box(button, after_sleep=0.5)
             self.log_info("度假：开始训练")
             return True
         self.click_main_action(after_sleep=0.5)
@@ -497,19 +509,18 @@ class TrainingHandlers:
             self.log_warning("认不出任何训练科目")
             return False
 
-        # 候选科目 = 有橙色小人 **或** 按钮外圈已经亮（金框/彩框）**或** 当前已选。
-        # 2026-10-27 16:48 事故：当前已选「投射」预读 队友 2｜经理 1｜装备 3｜
-        # 满经验 1｜金框 1 = 8.30，但小人图标漏判 → 不在 with_team → 连候选都不是，
-        # 最后选了 1.00 的「防守」。用户指出：**金框已经识别到了，是筛选逻辑的锅**，
-        # 所以候选池必须把「圈已经亮了」的科目一起收进来，而不是只信小人图标。
+        # 候选科目 = **有橙色小人**（用户 2026-11-20 口径）。
+        # 队友数量（以及表情一致数量）才是倍率的基数；只有金框/彩框、没有队友，
+        # 等于光有乘数没有基数，拿不到高分 → 不能单独进候选。
+        # `current` 同样不单独拥有候选资格（2026-11-19 口径）。
         icons = self.find_teammate_icons()
         with_team = [n for n in boxes if self.has_teammate_icon(boxes[n], icons)]
+        # 圈亮只用来打日志（诊断「为什么这个科目被排除」），不再进候选池。
         ring_hit = [n for n in boxes
                     if self.has_gold_border(texts, subject=n, quiet=True)
                     or self.has_crit_border(texts, subject=n, quiet=True)]
         current = self.current_subject(texts)
-        candidates = [n for n in boxes
-                      if n in with_team or n in ring_hit or n == current]
+        candidates = list(with_team)
         self.log_info("候选科目（小人 " + ("、".join(with_team) if with_team else "无")
                       + "｜圈亮 " + ("、".join(ring_hit) if ring_hit else "无")
                       + "｜当前 " + (current or "无") + "）：" + "、".join(candidates))
@@ -584,8 +595,8 @@ class TrainingHandlers:
         # 缺口不足阈值排除，过减半门槛打 0.5 折。阈值从配置读。
         info = roster.lookup(self.configured_captain())
         required = attributes.required_attrs(info.get("position"))
-        soft_cap = int(self.config.get("属性减半门槛"))
-        gap_limit = int(self.config.get("缺口排除阈值"))
+        soft_cap = int(params.attributes.soft_cap)
+        gap_limit = int(params.attributes.gap_limit)
         caps = getattr(self, "_attr_caps", None) or {}
 
         def rank(name):
@@ -599,7 +610,7 @@ class TrainingHandlers:
                 return None
             return (0, *pri)
 
-        # 候选池 = 小人 / 金边 / 彩边 / 当前已选（用户 2026-10-27：三种信号都算）
+        # 候选池 = **有队友的科目**（用户 2026-11-20：没有队友不能入选）。
         # 但只保留**真正探测过**的科目：探测失败的名字没有分数，留在池里等于按 0 分
         # 跟别人比，还可能被选去盲点；一个都没探到时退回当前已选，别乱点。
         pool = [n for n in candidates if n in results]
@@ -663,22 +674,20 @@ class TrainingHandlers:
         name = max(ranked, key=ranked.get)
         # 失败率只卡**第一名**（2026-11-17 用户口径）：分数最高的科目超限就休息，
         # 不再为了「不浪费一天」退而求其次去练低分科目。
+        # 2026-11-18：去掉「失败率超限改休息」开关 —— 超限一律休息，不再暴露硬练选项。
         top_fail = (results.get(name) or {}).get("fail")
         if top_fail is None or top_fail > fail_limit:
             rates = "、".join(f"{n} {v if v is not None else '?'}%"
                               for n, v in fails.items())
             shown = top_fail if top_fail is not None else "?"
-            if self.config.get("失败率超限改休息") or self.stamina_gate_day(texts):
-                self._force_rest = True
-                self._force_reason = (f"最优科目「{name}」失败率 {shown}%"
-                                      f" 超过上限 {fail_limit}%")
-                self.log_warning(f"{self._force_reason}（{rates}）"
-                                 " → 退出科目页，回主界面休息")
-                # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
-                self.exit_page(after_sleep=0.15)
-                return True
-            self.log_warning(f"最优科目「{name}」失败率 {shown}%"
-                             f" 超过上限 {fail_limit}%（配置为不休息，继续）")
+            self._force_rest = True
+            self._force_reason = (f"最优科目「{name}」失败率 {shown}%"
+                                  f" 超过上限 {fail_limit}%")
+            self.log_warning(f"{self._force_reason}（{rates}）"
+                             " → 退出科目页，回主界面休息")
+            # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
+            self.exit_page(after_sleep=0.15)
+            return True
         # 第4周周三（精力阈值保周四那一练）：第一名还要满足「训练后精力 ≥ 阈值」，
         # 不满足就休息，**不换第二名**（换人就是凑数）。
         if self.stamina_gate_day(texts):

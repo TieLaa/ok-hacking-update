@@ -69,6 +69,7 @@ from src.tasks.ui import labels
 from src.tasks.training import attributes
 from src.tasks.training import params
 from src.tasks.training.constants import SHOP_SEASON_WEEKS
+from src.tasks.training.strategy import styles
 
     # 地点名（地图上的按钮文字 / 状态里的键）
 PLACE = "步行街"
@@ -350,7 +351,7 @@ class StreetPlace:
             # 2026-11-14 实跑「器材暴击++(金) vs 额外零用钱+(紫)」选了金卡，
             # 零用钱才是这些流派的瓶颈。
             # **训练流例外**：训练流不消费零用钱，零用钱卡没有价值。
-            money_first = self.style != "训练流"
+            money_first = styles.style_spec(self.style).cash_first
             c["money_rank"] = 1 if (money_first and target == "CASH") else 0
             # 2026-11-14：**符合本流派的专属卡排最前**（流派优先，品质之前）。
             # 例：训练流里「器材暴击++」比同品质的属性卡更该买（收益率不同）。

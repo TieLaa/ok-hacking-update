@@ -4,12 +4,12 @@
 
   1. **位置需求属性**：按队长位置补短板（`POSITION_TARGETS`）；
   2. **缺口 < 阈值**：离上限不足 `缺口排除阈值`（默认 100）→ 排除；
-  3. **过减半门槛**：当前值 ≥ `属性减半门槛`（默认 1300）→ score × 0.5；
+  3. **过减半门槛**：当前值 ≥ `属性减半门槛`（默认 1200）→ score × 0.5；
   4. **需求属性加成**：+0.5 加进 score（在 `scoring.subject_score` 里），
      跟着 0.5 折扣一起打折。
 
 分工：
-- 阈值从配置读（`属性减半门槛` / `缺口排除阈值`），本模块只接收参数；
+- 阈值从 `strategy/params.json` 的 `attributes` 段读（`soft_cap` / `gap_limit`），本模块只接收参数；
 - 本模块不读帧、不碰 self —— 单测可以脱离游戏跑。
 """
 
@@ -33,8 +33,8 @@ REQUIRED_BONUS = 0.5
 # 当前值读不到时的垫底值（与旧 subject_rank 一致：不能靠「读不到」白捡便宜）
 UNKNOWN_VALUE = 10 ** 6
 
-# 默认阈值（配置键缺失时用它；正常路径由调用方从 config 传入）
-DEFAULT_SOFT_CAP = 1300
+# 默认阈值（调用方不传时用它；正常路径由调用方从 params.attributes 传入）
+DEFAULT_SOFT_CAP = 1200
 DEFAULT_GAP_LIMIT = 100
 
 

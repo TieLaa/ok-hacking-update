@@ -23,8 +23,9 @@ from collections import namedtuple
 from src.tasks.training import params
 from src.tasks.training.constants import (
     PARK_PICNIC_STAMINA, SHOP_SEASON_WEEKS,
-    WEEKEND_MAIN_PLACE, WEEKEND_PARK_GAP, WEEKEND_PLAN,
-    WORK_STAMINA_COST)
+    WEEKEND_PARK_GAP, WORK_STAMINA_COST)
+from src.tasks.training.strategy import styles
+from src.tasks.training.strategy.context import VenueContext, WeekendContext
 from src.tasks.training.places import street
 from src.tasks.ui import labels
 
@@ -91,85 +92,26 @@ class MapPlace:
             return None
         return max(top - cur, 0)
 
-    def training_weekend_places(self, texts=None, day=None, st=None):
-        """训练流周末：按精力缺口选今天做什么（2026-11-11 用户口径）。
-
-        缺口 = 精力上限 − 当前精力。**不再看固定星期几**：
-
-            缺口 ≥ 周末划船缺口（默认 30） → 公园
-                公园内再按「周末野餐缺口」（默认 70）分野餐/划船；
-            缺口 < 周末划船缺口（30） → 餐厅打工
-
-        打工后面跟「公园」兜底：这一站打不了工时，公园划船还能拿属性，
-        不至于把一天空掉。读不到精力时返回 None，由调用方回退「餐厅 → 公园」。
-
-        为什么缺口小也不去步行街/游戏厅（2026-11-11 用户口径）：
-        那两处都是**花掉一天 + 花掉零用钱**，只换一张卡；打工是**花掉一天 +
-        赚 240~420 零用钱**，而商店买牛奶/秘籍不占日期 —— 特训牛奶 50 币
-        能让 3 天训练少耗 40% 精力（约 1 个训练日），对训练流严格更划算。
-        """
-        # 2026-11-15 用户口径（第二次调整）：最后一周周六**零花钱超过 120 就先去
-        # 步行街刷最后一次彩卡**；买到了今天收工，没买成才去餐厅打工。
-        # 120 沿用商店那条储备线（`shop.keep_money_before_last_day`）：低于它连
-        # 一张彩卡都买不起，去也是白跑。
-        # 更早的口径「有划船比赛就去公园」已作废（实跑证明比赛不给钱）。
-        week = self.current_day()[0]
-        if week == SHOP_SEASON_WEEKS and (day or "六") == "六":
-            keep = int(params.shop.keep_money_before_last_day)
-            if st is not None and "步行街" in st.visited:
-                if st.gacha_spent:
-                    self.log_info("周末（第7周周六）：步行街买到卡了 → 今天不再打工")
-                    return []
-                self.log_info("周末（第7周周六）：步行街没买成 → 去餐厅打工")
-                return ["餐厅"]
-            money = self.read_money(texts)
-            if money is not None and money > keep:
-                self.log_info(
-                    f"周末（第7周周六）：零用钱 {money} > {keep}"
-                    " → 先去步行街刷彩卡（没买成再打工）")
-                return ["步行街", "餐厅"]
-            self.log_info(
-                f"周末（第7周周六）：零用钱不够（{money}）→ 去餐厅打工，"
-                "钱留给周日商店")
-            return ["餐厅"]
-        gap = self.weekend_gap(texts)
-        if gap is None:
-            return None
-        row_gap = int(self.config.get("周末划船缺口"))
-        if gap >= row_gap:
-            # 周六：精力花光周日还能补 → 先去餐厅看一眼，单卡 ≥3 人的高收益工
-            # 就打（`restaurant.restaurant_preference` 里「分散就回公园」）。
-            # 周日：花光精力下周训练日就少一天 → 直接公园，不为 100 多币赌掉一练。
-            if (day or "六") == "六":
-                self.log_info(
-                    f"周末（周六）缺口 {gap} ≥ {row_gap} → 先餐厅看一眼"
-                    "（单卡 ≥3 才打工，分散回公园；周日还能补精力）")
-                return ["餐厅", "公园"]
-            return ["公园"]
-        self.log_info(
-            f"周末缺口 {gap} < {row_gap} → 餐厅打工"
-            "（零用钱留给商店的牛奶/秘籍，周末不去步行街/游戏厅）")
-        return ["餐厅", "公园"]
-
     # ---------- 今天去哪几个地点 ----------
 
     def today_places(self, day=None, st=None, texts=None):
         """今天该去的地点（有序，前一个走完才轮到下一个）。
 
-        判据来自 `constants.WEEKEND_PLAN`（星期 + 流派 → 地点列表），
-        **训练流 / 扭蛋流 / 小游戏流除外**：
-        - 训练流：按精力缺口选动作（见 `training_weekend_places`）；
-          读不到缺口时回退「餐厅 → 公园」，**不再回退步行街/游戏厅**；
-        - 扭蛋流 / 小游戏流：候选固定是「主地点 + 餐厅」，与星期无关
-          （2026-11-10 用户口径）。这样训练日的额外出行日
-          （二星野上泷第 9/16/30 天）也走同一条门槛，不再靠「读不到星期 →
-          按周六兜底」隐式拿行程。
+        判据来自 `strategy/styles.py` 的 `weekend_places`：
+        - 扭蛋流 / 小游戏流：主地点 + 餐厅（与星期无关，2026-11-10 口径）；
+          买到 / 玩完当天收工；
+        - 商店流：餐厅；
+        - 训练流：按精力缺口 + 星期 + 第 7 周（`TrainingStyle.weekend_places`）；
+          缺口读不到时回退「餐厅 → 公园」。
+
+        这里只做三件**所有流派相同**的事：第 7 周周日不出行、两个场所开关过滤、
+        开关把地点删空时按体力缺口二选一。
         """
         if st is None:
             st = self.day_state()
         if day is None:
             day = (st.date or (None, None))[1]
-        # 读不到星期时按周六那一行兜底（商店流还按表走）。
+        # 读不到星期时按周六兜底（训练流的「周六先看餐厅」和 prefer_venue 的分档要用）。
         day = day or "六"
         # 2026-11-14 用户口径（游戏设置，唯一策略）：第 7 周周日不能再出行，
         # 只能进商店清空零花钱。所有流派都不规划地点。
@@ -177,30 +119,32 @@ class MapPlace:
         if week_now == SHOP_SEASON_WEEKS and day_now == "日":
             self.log_info("第7周星期日：不能再出行 → 只进商店")
             return []
-        if self.style == "训练流":
-            gap_places = self.training_weekend_places(texts, day, st)
-            if gap_places is not None:
-                return gap_places
-            # 缺口读不到：也不回退旧的「步行街 → 游戏厅」（训练流不再消费），
-            # 餐厅打不了工还有公园兜底。
-            self.log_info("周末：训练流读不到精力缺口 → 回退「餐厅 → 公园」")
+        bar = self.top_bar(texts)
+        ctx = WeekendContext(
+            style=self.style,
+            week=week_now,
+            day=day,
+            money=self.read_money(texts) if texts is not None else None,
+            stamina=bar.get("stamina"),
+            stamina_max=bar.get("stamina_max"),
+            visited=frozenset(st.visited),
+            gacha_spent=st.gacha_spent,
+            row_gap=int(self.config.get("训练流-周末划船缺口")),
+        )
+        places, why, final = styles.style_spec(self.style).weekend_places(ctx)
+        if places is None:
+            self.log_info(why)
             return ["餐厅", "公园"]
-        main = WEEKEND_MAIN_PLACE.get(self.style)
-        if main is not None:
-            # 买成扭蛋当天就结束，不用再去餐厅（小游戏流由 visited 过滤）。
-            places = [main, "餐厅"]
-            if self.style == "扭蛋流" and st.gacha_spent:
-                places = [main]
-        else:
-            places = list(WEEKEND_PLAN.get((day, self.style))
-                          or WEEKEND_PLAN.get(("六", self.style))
-                          or ["餐厅"])
+        if why:
+            self.log_info(why)
+        if final:
+            return places
         places = [p for p in places if p != "商店"]
         # 今天本来有没有「开关控制的地点」（步行街 / 游戏厅）。
         # 只有这种日子才可能被两个开关删空 —— 周日训练流只有公园，不算，
         # 那两个开关跟它没关系。
         had_venues = any(p in ("步行街", "游戏厅") for p in places)
-        if not self.config.get("允许进游戏厅"):
+        if not self.config.get("小游戏流-允许进游戏厅"):
             places = [p for p in places if p != "游戏厅"]
         if not self.config.get("允许进步行街"):
             places = [p for p in places if p != "步行街"]
@@ -258,64 +202,28 @@ class MapPlace:
         但折扣不是每次发生，没折扣时只够买 2 颗，已回滚 360。
         180 只在**地图确认今天打折**时由事件层生效，不是无条件降门槛。
 
-        **训练流**（2026-11-11 起）**不再经过这里**：缺口 < 30 固定去餐厅打工，
-        候选里已经没有步行街/游戏厅。下面这条「只有一边打折就先去那边」
-        只留给仍带这两个候选的旧行程（防御性兜底，以后加流派时不用重写）。
-        1. **只有一个在打折** → 去打折的那个；
-        2. 其他情况（都打折 / 都不打折）→ 保持原顺序。
+        **训练流 / 商店流**（主地点为空）**不经过这里**：原样返回候选，
+        由 `today_places` 给的两个地点决定顺序。
 
         队友气泡（`venue_has_mate`）**不参与任何一条**（2026-11-10 用户口径）：
         它看不到品质（带队友的可能是根本不买的蓝卡），也看不到刷新后的批次
         （买一颗刷一批，下一批才冒队友），对「去哪儿」没有预测力，只当添头。
-        删掉它之后，训练流周六原来那条「两边都有队友再比打折」自然退化成
-        「只有一边打折就去那边」。
 
         打折判据见 venue_on_discount（OCR 文本 + 名字左侧）。
         """
-        # 读不到星期时按周六那一行兜底（`today_places` 也是这么兜的）。
+        # 读不到星期时按周六兜底（第 7 周周六分档要用）。
         day = day or "六"
-        main = WEEKEND_MAIN_PLACE.get(self.style)
-        if main is not None:
-            pair = [p for p in places if p in (main, "餐厅")]
-            if len(pair) < 2:
-                return places
-            money = self.read_money(texts)
-            week, _ = self.current_day()
-            gate = int(params.weekend.work_money_gate)
-            # 2026-11-14 用户口径（游戏设置）：第 7 周周六是最后一次出行，
-            # **不看零花钱**直接去主地点；没消费再退出回餐厅打工（下一站）。
-            if day == "六" and week == SHOP_SEASON_WEEKS:
-                self.log_info(
-                    f"周末地点（第7周）：最后一次出行 → 直接去「{main}」"
-                    "（没消费再退出回餐厅打工）")
-                return [main] + [p for p in places if p != main]
-            if money is None:
-                self.log_info(f"周末地点：零用钱读不到 → 去「{main}」")
-            elif money < gate:
-                self.log_info(
-                    f"周末地点：零用钱 {money} < {gate}"
-                    " → 只去「餐厅」打工")
-                return ["餐厅"]
-            else:
-                self.log_info(
-                    f"周末地点：零用钱 {money} ≥ {gate}"
-                    f" → 去「{main}」")
-            return [main] + [p for p in places if p != main]
-
-        # ---- 训练流周六：只有一边打折就先去那边，否则按原顺序 ----
-        if day != "六" or self.style != "训练流":
-            return places
-        pair = [p for p in places if p in ("步行街", "游戏厅")]
-        if len(pair) < 2:
-            return places
-        discounted = [p for p in pair
-                      if self.venue_on_discount(texts, self._venue_box(texts, p))]
-        if len(discounted) == 1:
-            chosen = discounted[0]
-            self.log_info(f"周末地点：只有「{chosen}」在打折 → 先进它")
-            return [chosen] + [p for p in places if p != chosen]
-        self.log_info(f"周末地点：没分出高下，按原顺序 {pair}")
-        return places
+        ctx = VenueContext(
+            style=self.style,
+            day=day,
+            week=self.current_day()[0],
+            money=self.read_money(texts) if texts is not None else None,
+            places=tuple(places),
+        )
+        ordered, why = styles.style_spec(self.style).prefer_venue(ctx)
+        if why:
+            self.log_info(why)
+        return ordered
 
     # ---------- 今天的完整步骤（主计划 + 急招 detour） ----------
 
@@ -418,7 +326,8 @@ class MapPlace:
             # 第 7 周周六是最后一次出行：事件不许插队
             final_outing=(week == SHOP_SEASON_WEEKS and day == "六"),
             # 扭蛋流 + 步行街自己的「打折」+ 钱在折后门槛到原门槛之间
-            discount_worth=(st.style == "扭蛋流" and street_discount
+            discount_worth=(styles.style_spec(st.style).discount_bonus
+                            and street_discount
                             and money is not None
                             and discount_gate <= money < work_gate),
             places=tuple(places),
@@ -440,7 +349,8 @@ class MapPlace:
         if not rule.urgent and rule.place not in ctx.places:
             return False
         # 扭蛋流今天已经买到扭蛋 → 不再去餐厅打工
-        if rule.place == "餐厅" and ctx.style == "扭蛋流" and ctx.gacha_spent:
+        if (rule.place == "餐厅" and ctx.gacha_spent
+                and styles.style_spec(ctx.style).ends_day_after_venue):
             return False
         return bool(rule.when(ctx))
 

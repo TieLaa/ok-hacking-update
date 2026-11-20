@@ -42,7 +42,7 @@
 
 细则（缺口排除、1300 减半、各场景的优先级）见 [docs/ATTRIBUTE_PRIORITY.md](docs/ATTRIBUTE_PRIORITY.md)。
 
-## 扭蛋流周末出行的收支平衡（为什么门槛是 200）
+## 扭蛋流周末出行的收支平衡（为什么门槛是 360）
 
 一局 6 周，能进出行地图的次数是固定的：
 
@@ -103,17 +103,20 @@ k × C = (N − k) × W + R
 
 ### 方式一：安装包（推荐）
 
-**国内用户走夸克网盘**（GitHub 在国内经常连不上）：
+**国内用户直接下 cnb 镜像**（每次发版由 CI 同步，和 GitHub 上的安装包是同一份字节）：
 
-- 夸克网盘：https://pan.quark.cn/s/332f7585ffb9 （永久有效，不用提取码）
+- https://cnb.cool/TieLaa/ok-hacking-dist/-/releases
+- 点对应版本里的 `ok-hacking-win32-China-setup.exe`
+- 装好之后的更新也走 cnb 国内源，不会连 GitHub
+
+如果 cnb 打不开，备选夸克网盘：https://pan.quark.cn/s/332f7585ffb9 （永久有效，不用提取码）
 
 海外或能上 GitHub 的，到 [Releases](https://github.com/TieLaa/ok-hacking/releases) 下载：
 
 - `ok-hacking-win32-China-setup.exe` —— 依赖走国内镜像
 - `ok-hacking-win32-Global-setup.exe` —— 依赖走 PyPI 官方源
 
-校验：`ok-hacking-win32-China-setup.exe` v0.1.9 的 SHA256 是
-`ef903299399ba0e71b3230de00fcc63e8c3978aae8e1a27da426c844ac71a9ce`。
+校验：每个 cnb Release 的说明里写着安装包的 SHA256，下载后可核对。
 
 安装时系统会要管理员权限（`uac: true`）。首次启动会初始化 OCR 模型（OpenVINO），需要等一会儿。
 

@@ -651,7 +651,7 @@ class MonitorView(QWidget):
         if spec.get("show_stamina_toggle", True):
             self._check_stamina = CheckBox("允许吃专注药")
             self._check_stamina.setToolTip(
-                "勾上：专注低于「恢复专注下限」时自动喝饮料（+30/+60，绝不花钻石）；\n"
+                "勾上：专注低于开一局所需 30 时自动喝饮料（+30/+60，绝不花钻石）；\n"
                 "取消勾选：专注不足时点「取消」并停止自动训练，绝不喝药/钻石")
             self._check_stamina.toggled.connect(self._on_stamina_toggle)
             lay.addWidget(self._check_stamina)

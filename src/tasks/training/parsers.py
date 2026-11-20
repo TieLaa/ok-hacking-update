@@ -110,6 +110,11 @@ ATTR_NUM_RE = re.compile(r"(\d{2,4})")
 #   - `S+30` 被读成 `303` 这种黏连，用 PANEL_GAIN_MAX 兜住。
 PANEL_GAIN_RE = re.compile(r"(?<![A-Za-z±土])\+\s*(\d{1,3})")
 PANEL_GAIN_MAX = 200        # OCR 黏连时「S+30」读成 303，超 200 直接丢弃
+# 面板名字框的横向边界（中心点，占整帧宽的比例）：名字列在 0.41~0.52w；
+# 右侧科目按钮列从 0.68w 起，同名文字在 0.73w 以上（2026-11-19 实测）。
+# `attr_panel` 区域横向到 0.80w，不排掉的话 `exact_text` 会先命中科目按钮上的
+# 「意识」，拿它当这一格的名字 → 去别的行找值 → 整格丢。
+PANEL_NAME_X = 0.66
 ATTR_MIN_VALUE = 100
 ATTR_CAP_MIN, ATTR_CAP_MAX = 500, 9999
 ATTR_KEYS = 6                  # 六维齐全才算得出可信的「分数预测」
@@ -2115,7 +2120,9 @@ class TrainingParsersMixin:
         name_y = {}
         for t in self.texts_in_region(texts or [], "attr_gains"):
             nt = (t.name or "").strip()
-            if nt in tpl:
+            # 只认面板左半区的名字：右侧科目按钮列有同名文字（`意识` @0.76w），
+            # 拿它定行会把整条带子挪到上一行，增量就丢了（2026-11-19 实测 11 帧）。
+            if nt in tpl and (t.x + t.width / 2) / w < PANEL_NAME_X:
                 name_y.setdefault(nt, []).append((t.y + t.height / 2) / h)
         out = {}
         for name, boxes in tpl.items():
@@ -2275,6 +2282,104 @@ class TrainingParsersMixin:
             values.update(self._attr_values_reread(panel, missing))
         return values
 
+    def _panel_anchor(self, name):
+        """这一格在人工标注里的行中心 y（归一化）；没有标注返回 None。"""
+        boxes = self.panel_template().get(name) or []
+        if len(boxes) >= 4:
+            return boxes[3]["y"] + boxes[3]["h"] / 2
+        return None
+
+    def panel_name_box(self, panel, name):
+        """这一格的名字框：**整词**、且中心在面板左半区（`PANEL_NAME_X`）。
+
+        为什么要横向限制（2026-11-19 实测）：`attr_panel` 横向到 0.80w，右侧
+        科目按钮列（0.68w 起）里有同名文字（`意识` @0.76w），`exact_text` 会
+        先命中它，拿去当名字就会到别的行找值，整格丢。
+        """
+        if self.width <= 0:
+            return None
+        cands = [t for t in panel
+                 if t.name.strip() == name
+                 and (t.x + t.width / 2) / self.width < PANEL_NAME_X]
+        if not cands:
+            return None
+        anchor = self._panel_anchor(name)
+        if anchor is None:
+            return cands[0]
+        return min(cands, key=lambda t: abs(
+            (t.y + t.height / 2) / self.height - anchor))
+
+    def panel_name_blob(self, panel, name):
+        """名字和评级/数值被 OCR 并成一个框时的兜底（`意识C280/1600`）。
+
+        只在整词名字、人工标注格子都读不出时才用；同样只认面板左半区。
+        """
+        if self.width <= 0:
+            return None
+        cands = [t for t in panel
+                 if t.name.strip().startswith(name)
+                 and (t.x + t.width / 2) / self.width < PANEL_NAME_X]
+        if not cands:
+            return None
+        anchor = self._panel_anchor(name)
+        if anchor is None:
+            return cands[0]
+        return min(cands, key=lambda t: abs(
+            (t.y + t.height / 2) / self.height - anchor))
+
+    def panel_cell_value(self, name):
+        """按人工标注的「名字格 / 数值格」读这一格（`strategy/panel_boxes.json`）。
+
+        只在文本路径读不出这一格时用。先裁名字格确认这一行确实是该属性
+        （面板不在训练页 / 位置不对时不至于把别的行读进来），再裁数值格
+        放大 x3 重读。坐标用标注值；面板整体上下浮动时按 `dy` 试三个位置
+        （2026-11-19 实测：`run/000904_投射` 那种面板高 44px 的帧靠 -0.05 救回，
+        正常帧第一次 dy=0 就命中）。
+        返回 `(当前值, 上限或 None)`；名字对不上或数值读不出返回 None。
+        """
+        boxes = self.panel_template().get(name) or []
+        frame = self.frame
+        if len(boxes) < 4 or frame is None or not frame.any():
+            return None
+        h, w = frame.shape[:2]
+
+        def crop(box, xl, xr, y_margin, dy):
+            """`xl` 往左让、`xr` 往右让，**分开给**：数值格右边要包住红字（0.020），
+            左边不能跟着扩——评级字母就贴在数值左边，扩过去会把它圈进来。"""
+            x1 = int(max(0.0, box["x"] - xl) * w)
+            x2 = int(min(1.0, box["x"] + box["w"] + xr) * w)
+            yc = box["y"] + box["h"] / 2 + dy
+            y1 = int(max(0.0, yc - y_margin) * h)
+            y2 = int(min(1.0, yc + y_margin) * h)
+            return frame[y1:y2, x1:x2]
+
+        def read(box, xl, xr, y_margin, dy):
+            img = crop(box, xl, xr, y_margin, dy)
+            if img.size == 0:
+                return []
+            big = cv2.resize(img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+            try:
+                return self.ocr(frame=big) or []
+            except Exception as e:            # OCR 不可用（回归环境）时不炸
+                self.log_debug(f"六维格子 OCR 失败「{name}」: {e}")
+                return []
+
+        for dy in (0.0, -0.05, 0.05):
+            names = read(boxes[1], 0.004, 0.004, 0.022, dy)
+            if not any((t.name or "").strip().startswith(name) for t in names):
+                continue
+            cap = None
+            for t in read(boxes[3], 0.004, 0.020, 0.028, dy):
+                text = (t.name or "").replace(" ", "")
+                m = ATTR_PAIR_RE.search(text)
+                if m and ATTR_CAP_MIN <= int(m.group(2)) <= ATTR_CAP_MAX:
+                    cap = int(m.group(2))
+                value = attr_value_from(text, cap)
+                if value is not None:
+                    return value, cap
+            return None
+        return None
+
     def _attr_values_from(self, panel, names=None):
         """从一批**已经在面板区域内**的 OCR 结果里解析六维（不重读）。"""
         caps = getattr(self, "_attr_caps", None)
@@ -2283,32 +2388,49 @@ class TrainingParsersMixin:
             self._attr_caps = caps
         values = {}
         for name in (names or labels.TRAINING_SUBJECTS):
-            # 必须整词匹配：match_text 的「拼接兜底」会返回面板里最长的框
-            # （例如「C+354/±90」），拿来当名字会把整行读错。
-            head = self.exact_text(panel, (name,))
-            if head is None:
+            head = self.panel_name_box(panel, name)
+            if head is not None:
+                cy = head.y + head.height / 2
+                # 只取**这一格**里的文字：右边界是「名字右沿 + 一格的宽度」。
+                # 不加上界的话，左列那一格会把右列的数值吞进来（2026-11-04 实测：
+                # 运控那行把右边的上限 `1689` 当成自己的当前值）。
+                right_limit = head.x + head.width + self.width * 0.28
+                row = [t for t in panel
+                       if abs((t.y + t.height / 2) - cy) <= self.height * 0.035
+                       and head.x + head.width * 0.5 < t.x <= right_limit]
+                cap = caps.get(name)
+                for t in sorted(row, key=lambda b: b.x):
+                    m = ATTR_PAIR_RE.search(t.name.replace(" ", ""))
+                    if m and ATTR_CAP_MIN <= int(m.group(2)) <= ATTR_CAP_MAX:
+                        cap = caps[name] = int(m.group(2))     # 上限一局内不变，记下来
+                    value = attr_value_from(t.name, cap)
+                    if value is not None:
+                        values[name] = value
+                        break
+                else:
+                    if row:
+                        self.log_debug(f"六维「{name}」这一帧读不出可信值 →"
+                                       f"（{[t.name for t in row][:4]}，上限 {cap}）")
+            if name in values:
                 continue
-            cy = head.y + head.height / 2
-            # 只取**这一格**里的文字：右边界是「名字右沿 + 一格的宽度」。
-            # 不加上界的话，左列那一格会把右列的数值吞进来（2026-11-04 实测：
-            # 运控那行把右边的上限 `1689` 当成自己的当前值）。
-            right_limit = head.x + head.width + self.width * 0.28
-            row = [t for t in panel
-                   if abs((t.y + t.height / 2) - cy) <= self.height * 0.035
-                   and head.x + head.width * 0.5 < t.x <= right_limit]
-            cap = caps.get(name)
-            for t in sorted(row, key=lambda b: b.x):
-                m = ATTR_PAIR_RE.search(t.name.replace(" ", ""))
-                if m and ATTR_CAP_MIN <= int(m.group(2)) <= ATTR_CAP_MAX:
-                    cap = caps[name] = int(m.group(2))     # 上限一局内不变，记下来
-                value = attr_value_from(t.name, cap)
-                if value is not None:
-                    values[name] = value
-                    break
-            else:
-                if row:
-                    self.log_debug(f"六维「{name}」这一帧读不出可信值 →"
-                                   f"（{[t.name for t in row][:4]}，上限 {cap}）")
+            # 文本读不出这格 → 按人工标注的「名字格 + 数值格」重读一次。
+            got = self.panel_cell_value(name)
+            if got is not None:
+                value, cell_cap = got
+                if cell_cap:
+                    caps[name] = cell_cap
+                values[name] = value
+                continue
+            # 最后兜底：名字和评级/数值被 OCR 并成一个框（`意识C280/1600`）。
+            blob = self.panel_name_blob(panel, name)
+            if blob is None:
+                continue
+            m = ATTR_PAIR_RE.search(blob.name.replace(" ", ""))
+            if m and ATTR_CAP_MIN <= int(m.group(2)) <= ATTR_CAP_MAX:
+                caps[name] = int(m.group(2))
+            value = attr_value_from(blob.name, caps.get(name))
+            if value is not None:
+                values[name] = value
         return values
 
     def _attr_values_reread(self, panel, missing):
@@ -2324,7 +2446,7 @@ class TrainingParsersMixin:
         caps = getattr(self, "_attr_caps", {}) or {}
         out = {}
         for name in missing:
-            head = self.exact_text(panel, (name,))
+            head = self.panel_name_box(panel, name)
             if head is None:
                 continue                       # 连名字都没认出来，没法定这一格的位置
             cy = head.y + head.height / 2

@@ -583,14 +583,11 @@ class EntryHandlers:
         return True
 
     def handle_confirm_team(self, texts):
-        """确认编队：开始训练会扣专注且中途取消不返还，默认要用户先允许。"""
+        """确认编队：点「开始训练」（扣专注、中途取消不返还）。"""
         if self.match_text(texts, "确认编队") is None:
             return False
         if self.no_captain_mode:
             return self.stop_for_no_captain("确认编队（开始训练）")
-        if not self.config.get("允许开始训练"):
-            self.log_info("已禁用自动开始训练，停在这里等你确认")
-            return True
         # 注意：确认框正文里也有「开始训练」四个字（整句会被 OCR 成一个框），
         # 必须用**整词**匹配，否则会点到正文中间 (511,923)，按钮反而没点到。
         target = next((t for t in texts if t.name.strip() == "开始训练"), None)

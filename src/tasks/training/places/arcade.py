@@ -54,8 +54,8 @@ class ArcadePlace:
         return skip
 
     def arcade_paid_enabled(self):
-        """配置项「游戏厅付费」开了吗？"""
-        return bool(self.config.get("游戏厅付费"))
+        """配置项「小游戏流-游戏厅付费（预留开关）」开了吗？"""
+        return bool(self.config.get("小游戏流-游戏厅付费（预留开关）"))
 
     # ---------- 选哪张卡（纯判断） ----------
 
