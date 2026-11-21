@@ -6,7 +6,7 @@
 
 import time
 
-from src.tasks.training import params
+from src.tasks.training import params, prep, results
 from src.tasks.training.handlers.match import new_match_flags
 from src.tasks.training.queue import CaptainQueue
 from src.tasks.training.strategy import styles
@@ -137,9 +137,12 @@ class TrainingFlowMixin:
         返回 True 即任务完成）。有队列 → 每一局跑完回来记一次分、必要时换队长，
         直到**全部达标提前终止**，或撞上 `最大局数` 兜底。
         """
+        results.begin_run(self)
         try:
             return self.run_rounds()
         finally:
+            prep.clear_wait(self)
+            results.finish_run(self)
             # interaction 是框架全局单例：本任务退出后必须把 abort_check 摘掉，
             # 否则 TriggerTask（快速比赛）会被一个「已停止的训练任务」永远拦着。
             self.release_input_gate()
@@ -374,6 +377,15 @@ class TrainingFlowMixin:
                 last_sig = sig
                 self._sig_changed_at = time.time()
 
+            # 准备页等人：脚本不点击，两套「点了没反应」看门狗必须挂起，
+            # 否则 3 秒后会把用户正在选的页面点走（2026-11-21）。
+            if getattr(self, "_prep_wait", None) is not None:
+                self._sig_after_click = None
+                self._no_change = 0
+                self._last_click_at = 0.0
+                self._sig_changed_at = time.time()
+                prep.wait_heartbeat(self)
+
             # ---- 卡住就**立刻接管**（用户 2026-11-04 两条口径）----
             # ① 点击后 3 秒界面没变化；② 同一天点击超过 100 下。
             # **必须优先于所有 handler** —— 否则「handler 一直命中、点了没反应」会空转到死
@@ -470,6 +482,7 @@ class TrainingFlowMixin:
         """
         self._register_stage = None
         self._reg_ticks = 0
+        self._prep_wait = None
         self._abort_reason = None
         self._force_rest = False
         self._shop_day = None
@@ -489,6 +502,7 @@ class TrainingFlowMixin:
         self._round_done = False
         self._round_score_seen = False
         self._score_click_at = 0.0
+        self._run_rating = None
         # 「同一个 handler 连续命中」计数（STALL_LIMITS 用），换局必须清
         self._loop_handler = None
         self._loop_count = 0
@@ -519,6 +533,7 @@ class TrainingFlowMixin:
             info.pop("attrs", None)
             # 「卡住干预」那一行的上一次结论也别留着（新一局从头数点击）
             info.pop("stuck", None)
+            info.pop("prep_wait", None)
             # 技能是**一局一个角色**的量（`handle_skill_select` 每选一次 +1），
             # 必须每局清零。2026-11-10 实跑：只在 enable 时清 → 8 局攒成
             # 「彩1 金37 白9」→ 监控页分数预测 9444，而注册球员页真值 7703
@@ -673,9 +688,11 @@ class TrainingFlowMixin:
         score = getattr(self, "_run_score", None)
         if score is None:
             self.log_warning(f"整局都没读到队长「{captain}」的评分 → 本局按未达标算")
+        target = queue.target
+        results.record(self, score)
         met = queue.record(score)
         self.log_info(f"第 {len(queue.runs)} 局收账：{captain} 评分 {score}"
-                      f" / 目标 {queue.target} → {'达标' if met else '未达标，再练一局'}"
+                      f" / 目标 {target} → {'达标' if met else '未达标，再练一局'}"
                       f"（{queue.summary()}）")
         if queue.finished:
             self.log_info(self.queue_finished_message(queue), notify=True)

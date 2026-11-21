@@ -11,7 +11,7 @@ import os
 import cv2
 import numpy as np
 
-from src.tasks.training import page_signatures
+from src.tasks.training import page_signatures, results
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
 
@@ -327,6 +327,8 @@ class MatchHandlers:
             if settled is not None:
                 texts, score, rating = settled_texts, settled, settled_rating
             self._run_score = score
+            self._run_rating = rating
+            results.record(self, score, rating)
             queue = getattr(self, "_queue", None)
             target = queue.target if queue is not None else None
             self.log_info(f"本局评分：{score}（评级 {rating or '?'}）/ 目标 {target}"

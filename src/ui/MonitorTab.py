@@ -21,6 +21,7 @@ from ok.core.events import communicate
 from ok.ui.qt.widget.CustomTab import CustomTab
 from ok.util.file import get_relative_path
 
+from src.tasks.training import prep
 from src.ui.monitor_view import MISSING, MonitorActions, MonitorView
 
 logger = Logger.get_logger(__name__)
@@ -40,7 +41,7 @@ SKILL_KEYS = {"color": "技能-彩色", "gold": "技能-金色", "white": "技�
 ATTR_KEYS = 6
 
 DEFAULT_LAYOUT = {
-    "version": 1,
+    "version": 2,
     "sections": [
         {"type": "connection", "height": 54,
          "title": "{device_title}", "meta": "{device_meta}",
@@ -50,6 +51,19 @@ DEFAULT_LAYOUT = {
          "hint": "取消勾选 = 不接开局，只跑已有局",
          "show_quick_match": True, "show_auto_training": True,
          "start_text": "开始", "pause_text": "暂停"},
+        {"type": "cards", "height": 160, "items": [
+            {"id": "prep", "title": "准备页模式",
+             "options": ["自动选择", "半自动", "预配置"]},
+            {"id": "today", "title": "今日计划", "rows": [
+                ["比赛倒计时", "{match_countdown}"],
+                ["周末去处", "{weekend_plan}"],
+                ["野餐阈值", "缺口 ≥ {picnic_threshold}"],
+            ]},
+            {"id": "shop", "title": "商店", "rows": [
+                ["商店购买策略", "{buy_strategy}"],
+                ["今日已逛", "{shop_today}"],
+            ]},
+        ]},
         {"type": "hero", "height": 204,
          "kicker": "当前进度",
          "title": "第 {week} 周 {day}",
@@ -62,22 +76,6 @@ DEFAULT_LAYOUT = {
              {"label": "流派", "value": "{style}"},
              {"label": "已运行", "value": "{uptime}"},
          ]},
-        {"type": "cards", "height": 126, "items": [
-            {"id": "today", "title": "今日计划", "rows": [
-                ["比赛倒计时", "{match_countdown}"],
-                ["周末去处", "{weekend_plan}"],
-                ["野餐阈值", "缺口 ≥ {picnic_threshold}"],
-            ]},
-            {"id": "shop", "title": "商店", "rows": [
-                ["商店购买策略", "{buy_strategy}"],
-                ["今日已逛", "{shop_today}"],
-            ]},
-            {"id": "risk", "title": "风险", "rows": [
-                ["当前失败率", "{fail_rate}"],
-                ["失败率上限", "{fail_limit}"],
-                ["卡住干预", "{stuck}"],
-            ]},
-        ]},
         {"type": "timeline", "title": "最近动作", "max_rows": 8,
          "time_width": 62, "event_width": 80},
     ],
@@ -117,6 +115,9 @@ class _Actions(MonitorActions):
 
     def set_stamina_allowed(self, allowed):
         self.tab.set_stamina_allowed(allowed)
+
+    def set_prep_mode(self, mode):
+        self.tab.set_prep_mode(mode)
 
     def toggle_auto_training(self):
         self.tab.toggle_auto_training()
@@ -206,22 +207,57 @@ class MonitorTab(CustomTab):
         path = self._layout_path()
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
         except FileNotFoundError:
-            self._write_default_layout(path)
+            self._write_layout(path, DEFAULT_LAYOUT)
             return DEFAULT_LAYOUT
         except Exception as e:  # noqa: BLE001
             logger.error(f"monitor_layout.json 解析失败，用内置默认布局: {e}")
             return DEFAULT_LAYOUT
+        data, changed = self._migrate_layout(data)
+        if changed:
+            self._write_layout(path, data)
+            logger.info("监控页布局已迁移到 v2（准备页模式卡 + hero 下移）")
+        return data
 
-    def _write_default_layout(self, path: str):
+    @staticmethod
+    def _migrate_layout(data):
+        """v1 → v2：风险卡换成准备页模式（最左），hero 移到 cards 下面。
+
+        只改 cards / hero 两段，保留用户对其它 section 和卡片项的修改。
+        """
+        if not isinstance(data, dict) or int(data.get("version", 1)) >= 2:
+            return data, False
+        sections = data.get("sections") or []
+        cards = next((s for s in sections if s.get("type") == "cards"), None)
+        hero = next((s for s in sections if s.get("type") == "hero"), None)
+        if cards is None:
+            return data, False
+        new_items = [{"id": "prep", "title": "准备页模式",
+                      "options": ["自动选择", "半自动", "预配置"]}]
+        for item in cards.get("items") or []:
+            if item.get("id") in ("prep", "risk"):
+                continue
+            new_items.append(item)
+        cards["items"] = new_items
+        cards["height"] = max(int(cards.get("height", 126)), 160)
+        if hero is not None:
+            sections = [s for s in sections if s is not hero]
+            idx = next(i for i, s in enumerate(sections) if s is cards)
+            sections.insert(idx + 1, hero)
+        data["sections"] = sections
+        data["version"] = 2
+        return data, True
+
+    @staticmethod
+    def _write_layout(path: str, data: dict):
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(DEFAULT_LAYOUT, f, ensure_ascii=False, indent=2)
-            logger.info(f"已生成默认布局文件 {path}")
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.info(f"已写入监控页布局 {path}")
         except Exception as e:  # noqa: BLE001
-            logger.error(f"写默认布局失败 {path}: {e}")
+            logger.error(f"写监控页布局失败 {path}: {e}")
 
     def _build_view(self):
         if self._view is not None:
@@ -392,6 +428,8 @@ class MonitorTab(CustomTab):
             "score_stop": bool(config.get("刷到目标分")),
             "score_target": str(config.get("目标分") or ""),
             "stamina_allowed": bool(config.get("自动恢复专注")),
+            "prep_mode": config.get(prep.KEY) or prep.MODE_AUTO,
+            "prep_wait": info.get("prep_wait") or "",
             "fail_limit": config.get("失败率上限(%)", MISSING),
             "stuck": info.get("stuck") or (
                 f"3 秒无响应 / 日 {config.get('单日最大点击数', MISSING)} 次 · 未触发"),
@@ -721,6 +759,23 @@ class MonitorTab(CustomTab):
             task.config["自动恢复专注"] = value
             logger.info("监控页：允许吃专注药 → " + ("开（专注不足自动喝饮料，不花钻石）"
                                               if value else "关（专注不足也不喝，宁停不耗）"))
+        self._update_data()
+
+    def set_prep_mode(self, mode):
+        """监控页「准备页模式」：写配置键 `准备页模式`（落盘，重启保留）。"""
+        task = self._task()
+        if task is None:
+            logger.warning("监控页：没有找到训练任务，「准备页模式」未保存")
+            return
+        mode = (mode or "").strip()
+        if mode not in prep.MODES:
+            logger.warning(f"监控页：未知准备页模式 {mode!r}，忽略")
+            return
+        if (task.config.get(prep.KEY) or prep.MODE_AUTO) == mode:
+            return
+        task.config[prep.KEY] = mode
+        logger.info(f"监控页：准备页模式 → {mode}（设置已保存）")
+        self._notify(f"准备页模式：{mode}")
         self._update_data()
 
     def set_quick_match(self, enabled):

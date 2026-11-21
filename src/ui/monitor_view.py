@@ -17,6 +17,7 @@ import time
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QIcon, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -27,7 +28,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import (CheckBox, ComboBox, FluentIcon, LineEdit, PrimaryPushButton, SwitchButton)
+from qfluentwidgets import (CheckBox, ComboBox, FluentIcon, LineEdit, PrimaryPushButton,
+                            RadioButton, SwitchButton)
 
 from ok.util.file import get_relative_path
 
@@ -81,6 +83,10 @@ class MonitorActions:
 
     def set_stamina_allowed(self, allowed):
         """「允许吃专注药」勾选框：关掉后专注不够就休息，绝不喝饮料/钻石。"""
+        pass
+
+    def set_prep_mode(self, mode):
+        """准备页模式：自动选择 / 半自动 / 预配置。"""
         pass
 
     def toggle_auto_training(self):
@@ -214,6 +220,10 @@ class MonitorView(QWidget):
         self._edit_target: LineEdit | None = None
         # 「允许吃专注药」勾选框（关 = 不喝饮料，宁停不耗）
         self._check_stamina: CheckBox | None = None
+        # 准备页模式：3 个 radio + 等待状态行（2026-11-21）
+        self._prep_radios: dict[str, RadioButton] | None = None
+        self._prep_wait: QLabel | None = None
+        self._syncing_prep = False
         # 防止 update_data 回填时把用户正在输的值/刚点的勾抢回去
         self._syncing_extras = False
         self._train_text: tuple[str, str] = ("开始", "暂停")
@@ -403,6 +413,11 @@ class MonitorView(QWidget):
         if self._syncing_extras:
             return
         self.actions.set_stamina_allowed(checked)
+
+    def _on_prep_mode(self, mode: str, checked: bool):
+        if self._syncing_prep or not checked:
+            return
+        self.actions.set_prep_mode(mode)
 
     def _build_connection(self, spec: dict, path):
         card = self._card(spec.get("height", 54))
@@ -821,6 +836,9 @@ class MonitorView(QWidget):
             if item.get("_hidden"):
                 continue
             base = path + ("items", jdx)
+            if item.get("id") == "prep":
+                row.addWidget(self._build_prep(spec, item), 1)
+                continue
             card = self._card(spec.get("height", 126))
             lay = QVBoxLayout(card)
             lay.setContentsMargins(16, 14, 16, 10)
@@ -843,6 +861,62 @@ class MonitorView(QWidget):
                 lay.addWidget(row_frame)
             row.addWidget(card, 1)
         self.vBox.addLayout(row)
+
+    def _build_prep(self, spec: dict, item: dict):
+        """准备页模式卡：一张卡里竖排 3 个选项 + 等待状态（2026-11-21）。"""
+        card = self._card(spec.get("height", 160))
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(14, 12, 14, 10)
+        lay.setSpacing(1)
+
+        head = QHBoxLayout()
+        head.addWidget(self._label(item.get("title", "准备页模式"), "cardTitle"))
+        head.addStretch(1)
+        head.addWidget(self._label("队友/笔记/器材", "hintText"))
+        lay.addLayout(head)
+        lay.addSpacing(3)
+
+        self._prep_radios = {}
+        group = QButtonGroup(card)
+        group.setExclusive(True)
+        tags = {"自动选择": "默认", "半自动": "等人", "预配置": "阶段1占位"}
+        for mode in item.get("options", ["自动选择", "半自动", "预配置"]):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            radio = RadioButton(mode)
+            radio.setToolTip(self._prep_tooltip(mode))
+            if mode == "预配置":
+                # 阶段 1 占位：选项可见但不可点；等阶段 2 真正实现选人再开放
+                radio.setEnabled(False)
+            group.addButton(radio)
+            self._prep_radios[mode] = radio
+            radio.toggled.connect(
+                lambda checked, m=mode: self._on_prep_mode(m, checked))
+            row.addWidget(radio)
+            row.addStretch(1)
+            row.addWidget(self._label(tags.get(mode, ""), "hintText"))
+            if mode == "预配置":
+                btn = self._button("配置", lambda: None, height=22,
+                                   tooltip="阶段 1 暂未实现（先留接口）")
+                btn.setEnabled(False)
+                row.addWidget(btn)
+            lay.addLayout(row)
+
+        wait = self._label("", "hintText")
+        wait.setStyleSheet("color:#f0a44a;font-size:11px;")
+        wait.setVisible(False)
+        self._prep_wait = wait
+        lay.addWidget(wait)
+        lay.addStretch(1)
+        return card
+
+    @staticmethod
+    def _prep_tooltip(mode):
+        return {
+            "自动选择": "进页面直接点「自动选择」",
+            "半自动": "有空位停下来等你选，填满后自动下一步",
+            "预配置": "按队伍表选人（阶段 1 暂未实现，等同自动选择）",
+        }.get(mode, "")
 
     def _build_timeline(self, spec: dict, path):
         card = self._card()
@@ -890,6 +964,22 @@ class MonitorView(QWidget):
         self._sync_run_button(data)
         self._sync_switches(data)
         self._sync_score(data)
+        self._sync_prep(data)
+
+    def _sync_prep(self, data: dict):
+        """准备页模式 + 等待状态（2026-11-21）。"""
+        if self._prep_radios:
+            current = data.get("prep_mode") or "自动选择"
+            self._syncing_prep = True
+            try:
+                for mode, radio in self._prep_radios.items():
+                    radio.setChecked(mode == current)
+            finally:
+                self._syncing_prep = False
+        if self._prep_wait is not None:
+            page = data.get("prep_wait") or ""
+            self._prep_wait.setText(f"等待用户：{page}" if page else "")
+            self._prep_wait.setVisible(bool(page))
 
     def _sync_score(self, data: dict):
         if self._score_value is not None:

@@ -15,7 +15,7 @@ from src.tasks.ui import Defs
 from src.tasks.ui import labels
 from src.tasks.ui import zoom_reread
 from src.tasks.training import roster
-from src.tasks.training.constants import STYLE_ALIASES
+from src.tasks.training.constants import SHOP_ITEMS, STYLE_ALIASES
 
 # 科目按钮外圈「框」的判定门限（比例 = 环带上命中像素 / 环带总像素）。
 # 2026-10-27 第六局实跑 + 用户当场复核：
@@ -680,6 +680,26 @@ class TrainingParsersMixin:
                 # 点名称和价格之间的卡片图，避免点到价格/数量
                 "x": int(name.x + name.width / 2),
                 "y": int((name.y + name.height / 2 + pt.y) / 2),
+            })
+        # 0 元现金类（老板的馈赠 / 大乐透）：价格是极小的「0」，OCR 偶尔读不到，
+        # 整件就会丢掉 —— 2026-11-20 18:59 实跑：先买了 130 金卡，下一拍才看到
+        # 「老板的馈赠」。名字读到了、只是没配上价格的，按表价补一件。
+        priced = {i["name"] for i in items}
+        for n in names:
+            s = n.name.strip()
+            if s in priced or s not in SHOP_ITEMS:
+                continue
+            cat, price, _val = SHOP_ITEMS[s]
+            if cat != "cash":
+                continue
+            priced.add(s)
+            items.append({
+                "name": s,
+                "price": price,
+                # 现金类不看品质；没有价格框也没法采样，按「其他」记日志
+                "quality": "其他", "hue": -1, "sat": -1,
+                "x": int(n.x + n.width / 2),
+                "y": int(n.y + n.height / 2),
             })
         if len(items) > self.SHOP_MAX_ITEMS:
             # 超容量说明布局变了（强化又加格子？）——不做截断，截断可能把最贵的丢掉，

@@ -89,6 +89,13 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._shop_seen = False
         # 失败率超限时置 True：退出科目页后强制休息
         self._force_rest = False
+        # 准备页等人（半自动）：非 None 时主循环挂起两套「点了没反应」看门狗
+        self._prep_wait = None
+        # 每局结果（2026-11-21）：run() 开头清空，停止时写 logs/reports/
+        self._run_results = []
+        self._results_run_id = None
+        self._results_done = False
+        self._run_rating = None
         # 最近一次点击的墙钟时间：只做复盘（点击流水 / 空档统计），
         # 卡住判据**不再看时间**（2026-11-04 改成数点击/数操作，见 flow.day_stuck_step）。
         self._last_click_at = 0.0

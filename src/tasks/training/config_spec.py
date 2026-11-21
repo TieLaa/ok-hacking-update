@@ -27,6 +27,7 @@
     tools/check_handlers.py       ← 门禁（默认值只许写在这里）
 """
 
+from src.tasks.training import prep
 from src.tasks.ui import labels
 
 # 配置项类型（对齐 ok-script 的 config_type）
@@ -147,6 +148,17 @@ MATCH = [
     Spec("技能-白色", 1, INT, "同上（开局自带的白技能数量）", hidden=True),
 ]
 
+# ---------- 准备页（队友 / 笔记 / 器材）----------
+# 2026-11-21：模式由监控页的「准备页模式」卡片写回；任务配置卡里隐藏，
+# 避免玩家在两个地方各改一次。
+PREP = [
+    Spec(prep.KEY, prep.MODE_AUTO, DROP,
+         "选择队友 / 选择笔记 / 选择器材时："
+         "自动选择 = 直接点自动选择；半自动 = 有空位停下来等用户；"
+         "预配置 = 阶段 1 占位（等同自动选择）",
+         options=list(prep.MODES), hidden=True),
+]
+
 # ---------- 流程 / 运行时 ----------
 FLOW = [
     # 2026-11-18：内部卡住保护阈值，训练任务 GUI 不暴露；代码默认 3 秒。
@@ -220,7 +232,7 @@ QUEUE = [
          "2026-11-15 用户口径；旧键名「自动恢复精力」由 LEGACY_KEYS 搬过来）"),
 ]
 
-ALL = TRAINING + WEEKEND + SHOP + GACHA + ARCADE + MATCH + FLOW + QUEUE
+ALL = TRAINING + WEEKEND + SHOP + GACHA + ARCADE + MATCH + PREP + FLOW + QUEUE
 
 
 def _packaged():

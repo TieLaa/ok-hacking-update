@@ -7,6 +7,7 @@
 
 from src.tasks.training import roster
 from src.tasks.training import page_signatures
+from src.tasks.training import prep, prep_slots
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
 
@@ -488,23 +489,50 @@ class EntryHandlers:
                        duration=0.30, after_sleep=0.7)
 
 
+    def prep_action(self, page):
+        """准备页统一入口：读空位 → 按模式返回 auto / next / wait。
+
+        只做判断，不点击；三个页面共用这一套规则（细节在 `training/prep.py`）。
+        """
+        frame = getattr(self, "_tick_frame", None)
+        if frame is None:
+            frame = getattr(self, "frame", None)
+        empty = prep_slots.empty_slots(frame, page) if frame is not None else None
+        action = prep.decide(self, page, empty)
+        label = prep.page_label(page)
+        if action == "wait":
+            count = sum(1 for e in (empty or []) if e)
+            detail = f"，空位 {count} 个" if empty else "，槽位状态未识别"
+            prep.begin_wait(self, page, detail)
+        else:
+            if prep.waiting_page(self) is not None:
+                prep.clear_wait(self)
+                self.log_info(f"准备页：{label} 空位已满 → 继续")
+            self.log_info(f"准备页：{label} 模式={prep.mode(self)} "
+                          f"空位={empty} → {action}")
+        return action
+
     def handle_team(self, texts):
         if self.match_text(texts, "选择队友") is None:
             return False
         if self.no_captain_mode:
             return self.stop_for_no_captain("选择队友")
-        auto = self.match_text(texts, "自动选择")
-        if auto is not None:
-            self.click_box(auto, after_sleep=0.7)
-            self.log_info("队友：自动选择")
-        # 自动选择后队伍从 1 人变 5 人，底部面板会整体下移 40~50px，
-        # 必须重新 OCR「下一步」，不能复用点击前的坐标（实训 2026-10-26）。
-        # 2026-10-29：再等 0.8 秒让面板动画走完，否则新帧读到的还是旧位置，
-        # 于是每次都要等 8 秒超时、白打一条 stall5s。
-        # 2026-10-30 实测新流程：队长 → 队友 → 选择笔记 → 器材 → 确认编队。
-        # 这里原来只等「选择器材」，而下一屏其实是「选择笔记」→ 每次白等 8 秒
-        # 超时 + 5 秒兜底（用户感受到的「发呆十几秒」）。两个都算成功。
-        self.sleep(0.8)
+        action = self.prep_action("team")
+        if action == "wait":
+            return True
+        if action == "auto":
+            auto = self.match_text(texts, "自动选择")
+            if auto is not None:
+                self.click_box(auto, after_sleep=0.7)
+                self.log_info("队友：自动选择")
+            # 自动选择后队伍从 1 人变 5 人，底部面板会整体下移 40~50px，
+            # 必须重新 OCR「下一步」，不能复用点击前的坐标（实训 2026-10-26）。
+            # 2026-10-29：再等 0.8 秒让面板动画走完，否则新帧读到的还是旧位置，
+            # 于是每次都要等 8 秒超时、白打一条 stall5s。
+            # 2026-10-30 实测新流程：队长 → 队友 → 选择笔记 → 器材 → 确认编队。
+            # 这里原来只等「选择器材」，而下一屏其实是「选择笔记」→ 每次白等 8 秒
+            # 超时 + 5 秒兜底（用户感受到的「发呆十几秒」）。两个都算成功。
+            self.sleep(0.8)
         ok = self.click_button_and_expect("next", ("选择笔记", "选择器材"), timeout=8)
         if not ok:
             x, y = self.flow_point("next_step")
@@ -531,12 +559,16 @@ class EntryHandlers:
         if self.no_captain_mode:
             return self.stop_for_no_captain("选择笔记")
 
+        action = self.prep_action("note")
+        if action == "wait":
+            return True
+
         # 2026-10-30 用户反馈「选择笔记页一直有多余点击」：
         # 页面切换有动画，handler 每拍都会重新命中同一页 → 自动选择被反复点、
         # 下一步连点好几次。用两个运行期标记限流（reset_run_state 会清零）：
         #   * 自动选择：整局只点 1 次（点完卡片高亮会变，指纹去重不可靠）；
         #   * 下一步：连续最多 2 次，之后只等切页。
-        if not getattr(self, "_note_auto_done", False):
+        if action == "auto" and not getattr(self, "_note_auto_done", False):
             auto = self.exact_text(texts, ("自动选择",))
             if auto is not None:
                 self.click_box(auto, after_sleep=0.5)
@@ -567,11 +599,15 @@ class EntryHandlers:
             return False
         if self.no_captain_mode:
             return self.stop_for_no_captain("选择器材")
-        auto = self.match_text(texts, "自动选择")
-        if auto is not None:
-            self.click_box(auto, after_sleep=0.7)
-            self.log_info("器材：自动选择")
-        self.sleep(0.8)          # 同上：等卡片刷新完再找「下一步」
+        action = self.prep_action("equipment")
+        if action == "wait":
+            return True
+        if action == "auto":
+            auto = self.match_text(texts, "自动选择")
+            if auto is not None:
+                self.click_box(auto, after_sleep=0.7)
+                self.log_info("器材：自动选择")
+            self.sleep(0.8)          # 同上：等卡片刷新完再找「下一步」
         # 2026-10-30：新流程里器材页之后是「选择笔记」，不是直接「确认编队」。
         # 只等确认编队会白等满 8 秒超时（用户实测「发呆 16 秒」就是这里 +
         # 后面 5 秒兜底）。两个目标都算成功。
@@ -588,6 +624,8 @@ class EntryHandlers:
             return False
         if self.no_captain_mode:
             return self.stop_for_no_captain("确认编队（开始训练）")
+        # 用户可能自己把准备页点过去了；这里兜底清掉等待态，别让看门狗一直挂着
+        prep.clear_wait(self)
         # 注意：确认框正文里也有「开始训练」四个字（整句会被 OCR 成一个框），
         # 必须用**整词**匹配，否则会点到正文中间 (511,923)，按钮反而没点到。
         target = next((t for t in texts if t.name.strip() == "开始训练"), None)
