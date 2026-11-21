@@ -7,14 +7,6 @@ here, it falls back to that version's commit messages.
 Format: `## <version>` starts a version, `- ` starts one change. The About page
 lists the entries of **every** version between the installed one and the target.
 
-## v0.2.5
-
-- Training subjects without a teammate icon are no longer selectable (including the currently selected one)
-- The training score page pauses for 1 second and its final value is used for judging (the register page no longer overrides it)
-- Equipment event: an "attribute cap" option is picked first when present; otherwise stamina vs money is chosen by stamina ratio (below half takes stamina, otherwise money)
-- Weekend extra-training page: after backing out of the subject page it goes out instead of looping back into training
-- Training-camp event: the two bottom cards use the generic event rules (pure stamina recovery is skipped) instead of clicking the narration and getting stuck
-
 ## v0.2.1
 
 - Closing the window no longer freezes: OpenVINO telemetry is turned off at startup
