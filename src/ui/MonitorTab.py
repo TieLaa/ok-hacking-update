@@ -49,7 +49,7 @@ DEFAULT_LAYOUT = {
         {"type": "captain", "height": 54,
          "label": "指定队长",
          "hint": "取消勾选 = 不接开局，只跑已有局",
-         "show_quick_match": True, "show_auto_training": True,
+         "show_quick_match": False, "show_auto_training": True,
          "start_text": "开始", "pause_text": "暂停"},
         {"type": "cards", "height": 160, "items": [
             {"id": "prep", "title": "准备页模式",
@@ -59,9 +59,15 @@ DEFAULT_LAYOUT = {
                 ["周末去处", "{weekend_plan}"],
                 ["野餐阈值", "缺口 ≥ {picnic_threshold}"],
             ]},
-            {"id": "shop", "title": "商店", "rows": [
-                ["商店购买策略", "{buy_strategy}"],
-                ["今日已逛", "{shop_today}"],
+            {"id": "race", "title": "赛事", "controls": [
+                {"type": "switch", "label": "快速比赛", "action": "quick_match",
+                 "tooltip": "常驻监听养成之外的比赛（全国大赛 / 圣山战 / 竞技场等）："
+                            "赛前跳过 / 进比赛点 ▶▶ / 收结算。开启时执行器还停着会顺手唤醒；"
+                            "关闭只停快速比赛。"},
+                {"type": "button", "label": "全国大赛", "action": "national_cup",
+                 "text": "开始",
+                 "tooltip": "自动进全国大赛连续挑战：能跳过就跳过，跳不了进比赛快进，"
+                            "挑战券用完自动停。"},
             ]},
         ]},
         {"type": "hero", "height": 204,
@@ -106,6 +112,9 @@ class _Actions(MonitorActions):
 
     def set_quick_match(self, enabled):
         self.tab.set_quick_match(enabled)
+
+    def start_national_cup(self):
+        self.tab.start_national_cup()
 
     def set_score_stop(self, enabled):
         self.tab.set_score_stop(enabled)
@@ -826,6 +835,28 @@ class MonitorTab(CustomTab):
         else:
             # 关：只关自己。执行器归第一栏【停止】管，这里不碰
             logger.info("监控页：快速比赛 → 关（不动执行器）")
+        self._update_data()
+
+    def start_national_cup(self):
+        """赛事卡【开始】—— 启动全国大赛任务（与任务卡【开始】同源）。
+
+        只 enable 这一个任务：执行器停着时 `start_controller.start(task)`
+        会自己刷设备、必要时拉起游戏；已经在跑就不重复启动。
+        """
+        task = self._task_by_name("NationalCupTask")
+        if task is None:
+            logger.warning("监控页：没找到「全国大赛」任务")
+            self._notify("没找到全国大赛任务：可能还在加载，稍后再点一次", error=True)
+            return
+        if getattr(task, "running", False):
+            self._notify("全国大赛正在跑：等挑战券用完或手动停止")
+            return
+        try:
+            logger.info("监控页：全国大赛 → 开始（start_controller.start(task)）")
+            og.app.start_controller.start(task)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"启动全国大赛失败: {e}")
+            self._notify(f"启动全国大赛失败: {e}", error=True)
         self._update_data()
 
     def toggle_auto_training(self):

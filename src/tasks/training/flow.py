@@ -512,6 +512,8 @@ class TrainingFlowMixin:
         # 选队长前的筛选流程（显示设定 → 筛选 → 重置 → 缩池 → 确定）
         self._captain_filter_done = False
         self._captain_filter_stage = None
+        # 刚点完「确定」→ 队长列表已回到第一屏，下一拍不必再上翻
+        self._captain_list_at_top = False
         self._picked_subject = False
         self._picked_index = 0
         self._subject_confirmed_at = 0.0

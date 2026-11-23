@@ -17,7 +17,7 @@ install_quiet_filters()
 # 必须在 OCR 初始化前关掉。同样靠本模块的 import 时机覆盖所有启动路径。
 disable_openvino_telemetry()
 
-version = "0.2.6"
+version = "0.2.7"
 #不需要修改version, Github Action打包会自动修改
 
 gui_config = {
@@ -141,6 +141,7 @@ config = {
     'my_app': ['src.globals', 'Globals'], #可选. 全局单例对象, 可以存放加载的模型, 使用og.my_app调用
     'onetime_tasks': [  # 用户点击触发的任务
         ["src.tasks.TrainingTask", "TrainingTask"],
+        ["src.tasks.NationalCupTask", "NationalCupTask"],
         ["src.tasks.InputTestTask", "InputTestTask"],
         ["ok", "DiagnosisTask"],
     ],

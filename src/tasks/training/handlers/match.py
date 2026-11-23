@@ -39,6 +39,19 @@ class MatchHandlers:
     FF_ASPECT = (2.0, 6.0)   # 药丸是横长条
     FF_BRIGHT_RANGE = (0.03, 0.45)   # 双三角在药丸内的占比（实拍 0.089~0.136）
 
+    # --- 活动闯关星数页（2026-11-21 用户截图，1548x871）---
+    # 星星在每行最前面，位置随文字长度变；文字过长会截断换行，所以只认星星。
+    # 实心金色 = 已获得，灰色 = 未获得（用户口径）。
+    # 下边界留到按钮上方：文字换行会把最后一行往下推，但不能吃进「继续」按钮。
+    STAR_ROI = (0.20, 0.32, 0.80, 0.78)   # 条件列表区域（画面比例）
+    STAR_GOLD_HSV = ((10, 100, 150), (40, 255, 255))
+    STAR_GRAY_HSV = ((0, 0, 80), (180, 60, 170))
+    STAR_AREA = (0.00020, 0.0030)         # 星形连通块面积 / 整帧面积
+    STAR_SIZE = (0.012, 0.010, 0.065, 0.065)  # 宽下限/高下限/宽上限/高上限（画面比例）
+    # 填充率上限 0.75 挡掉整行黄色高光条（实拍 0.96~0.99）；长宽比上限 2.6 挡横向光条。
+    STAR_SHAPE = (0.20, 0.75, 2.6)        # 填充率下限/上限、长宽比上限
+    GRAY_STAR = (0.00045, 0.42)           # 灰星面积下限、填充率下限（灰字碎块 0.00025/0.34）
+
     def match_ff_visible(self, frame=None):
         """左下角 ▶▶ 快进按钮在不在（像素判定，不依赖 OCR）。
 
@@ -203,6 +216,113 @@ class MatchHandlers:
         self.click(int(self.width_of_screen(0.5)), int(self.height_of_screen(0.5)), after_sleep=0.45)
         return True
 
+    def match_stars(self, frame=None):
+        """数闯关星数页的星：返回 (金色实心星, 灰色未达成星)，读不到画面返回 None。
+
+        2026-11-21 用户口径：星星在每行最前面，位置随文字长度变；行数 = 关卡
+        要求星数；文字过长会截断换行，所以**只认星星、不认文字行**。
+        实心金色 = 已获得，灰色 = 未获得。
+        """
+        frame = frame if frame is not None else getattr(self, "_tick_frame", None)
+        if frame is None:
+            frame = getattr(self, "frame", None)
+        if frame is None or not hasattr(frame, "shape"):
+            return None
+        height, width = frame.shape[:2]
+        area = width * height
+        x1, y1, x2, y2 = self.STAR_ROI
+        roi = frame[int(y1 * height):int(y2 * height),
+                    int(x1 * width):int(x2 * width)]
+        if roi.size == 0:
+            return None
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+        def count(mask, min_area, min_fill):
+            total = 0
+            n, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+            for i in range(1, n):
+                _, _, ww, hh, a = stats[i]
+                if ww <= 0 or hh <= 0:
+                    continue
+                fill = a / float(ww * hh)
+                aspect = max(ww, hh) / float(min(ww, hh))
+                if (area * min_area <= a <= area * self.STAR_AREA[1]
+                        and width * self.STAR_SIZE[0] <= ww <= width * self.STAR_SIZE[2]
+                        and height * self.STAR_SIZE[1] <= hh <= height * self.STAR_SIZE[3]
+                        and min_fill <= fill <= self.STAR_SHAPE[1]
+                        and aspect <= self.STAR_SHAPE[2]):
+                    total += 1
+            return total
+
+        gold = cv2.inRange(hsv, np.array(self.STAR_GOLD_HSV[0]),
+                           np.array(self.STAR_GOLD_HSV[1]))
+        gray = cv2.inRange(hsv, np.array(self.STAR_GRAY_HSV[0]),
+                           np.array(self.STAR_GRAY_HSV[1]))
+        return (count(gold, self.STAR_AREA[0], self.STAR_SHAPE[0]),
+                count(gray, self.GRAY_STAR[0], self.GRAY_STAR[1]))
+
+    def handle_match_star_result(self, texts):
+        """闯关星数页：满星点「继续」，缺星点「重新挑战」（**只给快速比赛用**）。
+
+        2026-11-21 用户截图：`胜利 / 第三章第6关 / 5 行条件 / 返回 / 重新挑战 / 继续`。
+        有的关卡要 3 星、有的要 5 星，行数由要求决定；实心金色 = 已获得，
+        灰色 = 未获得。文字过长会换行，所以只数星星。
+        """
+        retry = self.exact_text(texts, labels.BUTTONS["retry_match"])
+        cont = self.exact_text(texts, labels.BUTTONS["continue"])
+        if retry is None or cont is None:
+            return False
+        stars = self.match_stars()
+        if stars is None:
+            return False
+        gold, gray = stars
+        if gold + gray < 3:
+            self.log_warning(f"闯关星数页：只识别到 {gold + gray} 颗星，先不动")
+            return False
+        if gray:
+            self.click_box(retry, after_sleep=1.0)
+            self.log_info(f"闯关：{gold}/{gold + gray} 星，{gray} 颗灰星 → 重新挑战")
+            self._match_intro_at = 0.0          # 上一局的开场窗口作废
+            return True
+        self.click_box(cont, after_sleep=1.0)
+        self.log_info(f"闯关：满星 {gold}/{gold} → 继续")
+        return True
+
+    def handle_match_retry(self, texts):
+        """活动赛/关卡失败页：「重新挑战」重开一局（**只给快速比赛用**）。
+
+        2026-11-21 用户截图（第三章第6关）：
+        `失败 / 提高球员评分后再来试试吧！ / 返回 / 重新挑战`。
+        旧路径先被 handle_match_result 的「失败」认成结算页，再点屏幕中央，
+        点不动。不要加进 TrainingTask 的注册表：养成流程遇到这页应当停下，
+        不能替用户把一局反复重开。
+        """
+        # 闯关星数页也有「重新挑战」，但它还有「继续」；让给星数 handler 判满星。
+        if self.exact_text(texts, labels.BUTTONS["continue"]) is not None:
+            return False
+        retry = self.exact_text(texts, labels.BUTTONS["retry_match"])
+        if retry is None:
+            return False
+        self.click_box(retry, after_sleep=1.0)
+        self.log_info("活动赛：重新挑战")
+        self._match_intro_at = 0.0          # 上一局的开场窗口作废
+        return True
+
+    def handle_match_start(self, texts):
+        """活动赛「赛前准备」页：点「开始比赛」开赛（**只给快速比赛用**）。
+
+        2026-11-21 用户截图：重新挑战后回到
+        `赛前准备 / 完成条件 / 两场比赛净胜分总和≥… / 开始比赛`。
+        这页没有「跳过比赛 / 前往比赛」，handle_prepare 认不出来，
+        快速比赛会一直等。不要加进 TrainingTask 的注册表。
+        """
+        start = self.exact_text(texts, labels.BUTTONS["start_match"])
+        if start is None:
+            return False
+        self._match_intro_at = time.monotonic()
+        self.click_box(start, after_sleep=0.8)
+        self.log_info("活动赛：开始比赛")
+        return True
 
     def init_match_state(self):
         """比赛相关的共享状态：养成任务和「快速比赛」模块都要初始化（两个任务共用）。"""

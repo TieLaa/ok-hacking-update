@@ -7,6 +7,18 @@ here, it falls back to that version's commit messages.
 Format: `## <version>` starts a version, `- ` starts one change. The About page
 lists the entries of **every** version between the installed one and the target.
 
+## v0.2.7
+
+- Captain filter: the rarity/position checkboxes click reliably now, and the selected captain is recognized right after filtering
+- Quick Match: event stages run automatically, retry after a failed stage, and continue when all stars are earned
+- National tournament: automatic challenge can be started directly from the monitor page
+
+## v0.2.6
+
+- Training preparation now has three modes: auto select, semi-auto, and preconfigured
+- Each run's training result is recorded immediately and summarized when the task stops
+- A shop item is no longer discarded when its price is misread as 0
+
 ## v0.2.5
 
 - Training subjects without a teammate icon are no longer selectable (including the currently selected one)

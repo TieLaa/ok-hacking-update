@@ -44,10 +44,14 @@ DIGITS_RE = re.compile(r"[0-9０-９]+")
 class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
                      SystemUIHandlers, BaseGirlsTask, TriggerTask):
 
-    # 顺序即优先级：先认比赛类界面，赛前准备放最后（它的「跳过/前往」是唯一的入口）
+    # 顺序即优先级：先认比赛类界面；活动赛的「重新挑战 / 开始比赛」必须排在
+    # handle_match_result 之前，否则会被结算页的「失败」判据抢走。
     HANDLERS = (
         MatchHandlers.handle_match_intro,
         MatchHandlers.handle_in_match,
+        MatchHandlers.handle_match_star_result,
+        MatchHandlers.handle_match_retry,
+        MatchHandlers.handle_match_start,
         MatchHandlers.handle_match_result,
         MatchHandlers.handle_skill_select,
         MatchHandlers.handle_event_choice,
@@ -150,7 +154,8 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
         known = (self.is_lobby(texts)
                  or self._has_match_hud(texts)
                  or any(k in joined for k in ("训练", "比赛", "商店", "公园",
-                                              "出行", "跳过", "下一步", "失败率")))
+                                              "出行", "跳过", "下一步", "失败率",
+                                              "重新挑战")))
         assert known, ("起始校验失败：画面既不是大厅也不是比赛/训练界面"
                        f"（识别到：{'/'.join(t.name for t in texts[:10])}）")
         return True

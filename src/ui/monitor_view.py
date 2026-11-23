@@ -73,6 +73,10 @@ class MonitorActions:
         """队长栏右侧「快速比赛」开关：只管快速比赛模块自己（跟自动训练无关）。"""
         pass
 
+    def start_national_cup(self):
+        """赛事卡【开始】：启动全国大赛任务（挑战券用完自动停）。"""
+        pass
+
     def set_score_stop(self, enabled):
         """「刷到目标分」勾选框：开着就反复练到目标分（复用多角色队列的提前终止）。"""
         pass
@@ -375,6 +379,14 @@ class MonitorView(QWidget):
     @Slot(bool)
     def _slot_quick(self, checked):
         self.actions.set_quick_match(bool(checked))
+
+    def _handler_for(self, action):
+        """卡片里的动作按钮 → MonitorView 槽（未知动作给空操作，别崩）。"""
+        return {"national_cup": self._slot_national_cup}.get(action, lambda: None)
+
+    @Slot()
+    def _slot_national_cup(self):
+        self.actions.start_national_cup()
 
     @Slot()
     def _slot_train(self):
@@ -858,6 +870,33 @@ class MonitorView(QWidget):
                     row_lay.addWidget(self._bind(right, row_spec[1]))
                 else:
                     row_lay.addWidget(right)
+                lay.addWidget(row_frame)
+            for ctrl in item.get("controls", []):
+                row_frame = QFrame()
+                row_frame.setObjectName("monitorRow")
+                row_lay = QHBoxLayout(row_frame)
+                row_lay.setContentsMargins(0, 5, 0, 5)
+                row_lay.setSpacing(8)
+                row_lay.addWidget(self._label(ctrl.get("label", ""), "rowLeft"))
+                row_lay.addStretch(1)
+                kind = ctrl.get("type")
+                if kind == "switch":
+                    switch = SwitchButton()
+                    switch.setOnText("开")
+                    switch.setOffText("关")
+                    if ctrl.get("tooltip"):
+                        switch.setToolTip(ctrl["tooltip"])
+                    if ctrl.get("action") == "quick_match":
+                        self._switch_quick = switch
+                        switch.checkedChanged.connect(self._slot_quick)
+                    row_lay.addWidget(switch)
+                elif kind == "button":
+                    btn = self._make_primary(ctrl.get("text", "开始"),
+                                             self._handler_for(ctrl.get("action")),
+                                             height=28)
+                    if ctrl.get("tooltip"):
+                        btn.setToolTip(ctrl["tooltip"])
+                    row_lay.addWidget(btn)
                 lay.addWidget(row_frame)
             row.addWidget(card, 1)
         self.vBox.addLayout(row)

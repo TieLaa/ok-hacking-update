@@ -312,6 +312,9 @@ class EntryHandlers:
                 self.log_warning("选队长筛选：没找到「确定」，已取消面板")
             self._captain_filter_done = True
             self._captain_filter_stage = None
+            # 确定后列表按新条件重排、回到第一屏（用户 2026-11-22 口径：
+            # 「筛选完已经归位，直接可以开始识别」）→ 下一拍别再上翻一屏。
+            self._captain_list_at_top = confirm is not None
             self.log_info("选队长：筛选完成，回训练核心")
             return True
         return False
@@ -354,19 +357,27 @@ class EntryHandlers:
             coords = Defs.CAPTAIN_FILTER["tab"]
         if coords is None:
             return None
-        return self.box_of_screen(coords[0], coords[1], coords[0], coords[1])
+        self.log_info(f"筛选面板：没认出「{name}」→ 用截图坐标兜底")
+        box = self.box_of_screen(coords[0], coords[1], coords[0], coords[1])
+        box.name = f"{name}兜底"
+        return box
 
     def _click_filter_text(self, texts, name):
         """点复选框的小方块中心（文字本身不切换勾选）。
 
         稀有度/位置：OCR 找到标签文字时，点文字框左侧的小方块中心
         （截图实测偏移约 0.0137w）；OCR 没找到时用截图坐标兜底。
+
+        兜底坐标本身就是复选框中心，**不能再减一次偏移**：`box_of_screen`
+        两个角相同，`Box` 把 0 宽高修成 1，用 `> 1` 区分「真文字框」和
+        「兜底点」。（2026-11-22 实跑：OCR 读成「√SR」→ 走兜底 → 又减 21px，
+        点在 (427,371)，复选框在 (440,334)，SR 没勾上。）
         """
         box = self._filter_text(texts, name)
         if box is None:
             self.log_warning(f"选队长筛选：没找到「{name}」")
             return False
-        if (box.width > 0
+        if (box.width > 1
                 and (name in Defs.CAPTAIN_FILTER["rarity"]
                      or name in Defs.CAPTAIN_FILTER["position"])):
             from ok.feature.Box import Box
@@ -401,7 +412,13 @@ class EntryHandlers:
         # 2026-10-30 用户实机：接手的局，队长列表**停在最下面**，
         # 只往下翻会从底部继续到底，上面的角色全漏掉（这一轮就漏了近江奏）。
         # 所以先往上翻到顶，再逐屏往下找。
-        self._captain_scroll_to_top()
+        # 例外：刚点完筛选的「确定」，列表已经按新条件重排回第一屏，
+        # 再上翻一屏纯属浪费（2026-11-22 实跑多花 3 秒、日志「往上翻 1 次」）。
+        if getattr(self, "_captain_list_at_top", False):
+            self._captain_list_at_top = False
+            self.log_info("队长列表：筛选后已归位顶部 → 跳过上翻")
+        else:
+            self._captain_scroll_to_top()
 
         tried = 0
         prev_names = None
