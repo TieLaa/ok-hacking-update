@@ -306,10 +306,44 @@ class DayCycleMixin:
     # 「认不出队长」时的弹窗标题
     CAPTAIN_ALERT_TITLE = "认不出队长"
 
-    def resolve_style_by_config(self):
-        """路径 A：配置里填了「指定队长」→ 查表定流派。
+    def configured_style(self):
+        """配置里的「指定流派」；「未选择」/空/未知值返回空串（= 接手时识别一次）。"""
+        value = (self.config.get("指定流派") or "").strip()
+        return value if value in styles.STYLES else ""
 
-        返回 True = 定下来了；False = 认不出（调用方弹窗，**不许保底**）。
+    def remember_style(self, style, name=None):
+        """定下流派并**写回配置**（2026-11-23：流派是存储值，不再实时跟随队长）。
+
+        `name` 只填「这一局实际的队长」，报告/评分按它认人；不传就保留原值。
+        """
+        self._style = style
+        if name:
+            self._style_name = name
+        if (self.config.get("指定流派") or "") != style:
+            self.config["指定流派"] = style
+        return True
+
+    def sync_style_for_captain(self, name):
+        """队长定了 → 把该队长的流派写进「指定流派」；查不到就保持不动。
+
+        队长改动（监控页 / 队列换人）走这里，是唯一的「查表带出默认流派」入口。
+        **不动 `_style_name`**：本局队长是谁由开局/日历决定，报告按它认人。
+        """
+        style = self.style_for_name(name)
+        if not style:
+            return False
+        self.remember_style(style)
+        self.log_info(f"流派：{style}（按队长「{name}」带出）")
+        return True
+
+    def resolve_style_by_config(self):
+        """先看「指定流派」，再看「指定队长」。
+
+        2026-11-23 用户口径：队长和流派各有一个下拉 —— 队长只负责开局自动
+        选人，流派决定训练逻辑。配置里已有流派就直接用；没有才按队长查一次表
+        带出（兼容老存档），查不到再去点日历（接手局只认一次，结果写死）：
+
+        返回 True = 定下来了；False = 认不出（调用方弹窗/走日历，**不许保底**）。
 
         2026-11-01 用户口径：
           - 配置里有队长 → 查表定流派，找得到 √，找不到**弹窗**；
@@ -321,6 +355,14 @@ class DayCycleMixin:
         → `style` 兜底「训练流」，周末计划全走错（实跑 2026-11-01 19:19：
         扭蛋流跑成了训练流）。
         """
+        style = self.configured_style()
+        if style:
+            # 队长身份不是流派：本局实际队长（`_style_name`）优先，
+            # 没有就记配置队长（报告/评分按位置用）。
+            self.remember_style(style, getattr(self, "_style_name", None)
+                                or self.configured_captain())
+            self.log_info(f"流派：{style}（指定流派）")
+            return True
         name = self.configured_captain()
         if not name:
             return False                    # 没配置 → 走路径 B
@@ -329,8 +371,7 @@ class DayCycleMixin:
             self.log_warning(
                 f"配置的队长「{name}」不在角色表（docs/roster）→ 认不出流派")
             return False
-        self._style = style
-        self._style_name = name
+        self.remember_style(style, name)
         self.log_info(f"流派：{style}（配置指定队长「{name}」，跳过日历）")
         return True
 
@@ -483,12 +524,11 @@ class DayCycleMixin:
         return True
 
     def resolve_style_by_calendar_name(self, name):
-        """已经拿到队长名字 → 查表定流派。"""
+        """已经拿到队长名字 → 查表定流派，并**写死到「指定流派」**（只认一次）。"""
         style = self.style_for_name(name)
         if not style:
             return False
-        self._style = style
-        self._style_name = name
+        self.remember_style(style, name)
         # 接手 + 勾了「刷到目标分」：把认出来的队长写回配置并补建队列
         # （flow.adopt_calendar_captain）
         self.adopt_calendar_captain(name)

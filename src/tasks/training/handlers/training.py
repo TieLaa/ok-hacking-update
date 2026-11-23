@@ -212,8 +212,7 @@ class TrainingHandlers:
         name = self.read_plan_captain(texts)
         style = self.style_for_name(name) if name else None
         if style:
-            self._style = style
-            self._style_name = name
+            self.remember_style(style, name)
             # 接手 + 勾了「刷到目标分」：写回指定队长并补建队列
             # （flow.adopt_calendar_captain）
             self.adopt_calendar_captain(name)

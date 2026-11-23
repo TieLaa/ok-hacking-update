@@ -108,8 +108,8 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._day_clicks = 0
         self._day_fixes = 0
         self._sig_changed_at = 0.0
-        # 当前流派（用户 2026-10-29）：**只由队长决定**。配置里填了队长，
-        # run()/点开始训练时直接查表写入；留空则由第一个训练日点日历解析。
+        # 当前流派（用户 2026-10-29）：默认按队长带出并存进「指定流派」；
+        # 2026-11-23 起流派是独立存储值，选队长时带出一次，之后各改各的。
         self._style = None
         self._style_name = None         # 日历上读到的队长名（日志/复盘用）
         # 2026-11-01：识别队长的计数器搬到 daycycle（_style_return_tries /

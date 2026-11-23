@@ -28,6 +28,7 @@
 """
 
 from src.tasks.training import prep
+from src.tasks.training.strategy import styles
 from src.tasks.ui import labels
 
 # 配置项类型（对齐 ok-script 的 config_type）
@@ -71,8 +72,14 @@ class Spec:
 TRAINING = [
     Spec("失败率上限(%)", 1, INT, "训练科目页按分数排第一的科目判：失败率高于这个值（或读不到）就休息，不再退而求其次练低分科目；第 4 周周三还要附加训练后精力 ≥ 50"),
     Spec("指定队长", "", STR,
-         "填角色名（如「真崎辉世」「佐久间」）→ 按这个角色的流派跑，开局就定好、不点日历；"
-         "留空 = 快速接手：进训练后点一次日历，按「XX的训练计划」里队长的流派跑"),
+         "只负责开局「选择队长」页自动选谁（填角色名，如「真崎辉世」「佐久间」）；"
+         "选队长时会把该队长的流派写进「指定流派」，之后两个下拉各改各的。"
+         "留空 = 不接开局，只跑已经手动开好的局"),
+    Spec("指定流派", styles.UNSET_STYLE, DROP,
+         "训练逻辑按这个流派跑（未选择 / 训练流 / 商店流 / 扭蛋流 / 小游戏流）。"
+         "监控页选队长时会自动带出该队长的流派；想换就改这里，立即生效。"
+         "「未选择」= 还没选：接手局会点一次日历认出队长，把结果写死在这里（只认一次）",
+         options=list(styles.CONFIG_STYLE_OPTIONS)),
 ]
 
 # ---------- 周末 / 地点 ----------
@@ -322,6 +329,17 @@ LEGACY_DROP = {
 }
 
 
+def _style_for_saved_captain(name):
+    """老存档迁移用：配置里的队长名 → 流派（复用运行时同一套名字归一化）。"""
+    if not name:
+        return ""
+    try:
+        from src.tasks.training.parsers import TrainingParsersMixin
+        return TrainingParsersMixin.style_for_name(name) or ""
+    except Exception:                                # noqa: BLE001
+        return ""
+
+
 def migrate_saved_config(name, folder="configs"):
     """把 `configs/<name>.json` 里的旧键名改成新键名。
 
@@ -359,6 +377,14 @@ def migrate_saved_config(name, folder="configs"):
             old_value = saved.pop(old_key)
             changed.append(
                 f"「{old_key}」的旧值 {old_value} 已丢弃（语义从精力改为缺口）")
+    # 2026-11-23：流派从「按队长实时派生」改成存储值。老存档没有这个键时，
+    # 按现有「指定队长」查一次表写死；查不到/没队长就留空（接手时再识别一次）。
+    if not saved.get("指定流派"):
+        captain = (saved.get("指定队长") or "").strip()
+        style = _style_for_saved_captain(captain)
+        if style:
+            saved["指定流派"] = style
+            changed.append(f"「指定流派」按「指定队长」{captain} 补成「{style}」")
     if not changed:
         return []
     try:

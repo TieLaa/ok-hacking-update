@@ -260,26 +260,33 @@ class TrainingFlowMixin:
         if interaction is not None and hasattr(interaction, "abort_check"):
             interaction.abort_check = self.input_blocked
             self._gate_interaction = interaction      # 退出时按这个引用摘掉（见 run）
-        # 2026-11-01 修正（用户口径）：队长/流派**只有两条解析路径，都不许保底**：
-        #   A. 配置里填了「指定队长」→ 查表定流派；
+        # 2026-11-01 修正（用户口径）：队长/流派**都不许保底**：
+        #   0. 2026-11-23：监控页选了明确「指定流派」→ 直接用它，不查队长、不点日历；
+        #   A. 否则配置里填了「指定队长」→ 查表定流派；
         #      查得到 √，查不到 → **弹窗**。
-        #   B. 配置为空（快速接手）→ 点多次返回回到训练室/校门口（那里能看到日期），
+        #   B. 否则（快速接手）→ 点多次返回回到训练室/校门口（那里能看到日期），
         #      点日历 → 抓队长名字 → 查表定流派；
         #      认到了 √，认不到 → **弹窗**。
         #
         # 旧逻辑的毛病：认不出就静默兜底「训练流」，结果扭蛋流跑成训练流
         # （实跑 2026-11-01 19:19），而且日志上看不出来。
         #
-        # 这里只做「路径 A」——路径 B 要点几次返回、跨几拍才能完成，
+        # 这里只做「指定流派 / 路径 A」——路径 B 要点几次返回、跨几拍才能完成，
         # 放在主循环里做（见 `_resolve_style_step`）。
         self.reset_style()
         if not self.resolve_style_by_config():
             self._style_pending = True
             self.log_info("未指定队长 → 回训练室/校门口点日历，识别队长")
         else:
-            # 配置里的队长已经把流派定下来了 → 明确关掉「待认队长」，
+            # 明确流派/配置队长已经把流派定下来了 → 明确关掉「待认队长」，
             # 否则上一局留下的 True 会让这一局开局先去点日历（多角色换人时踩过）
             self._style_pending = False
+        if (self.configured_style() and self.config.get("刷到目标分")
+                and not self.configured_captain()):
+            # 明确流派时不点日历 → 认不出队长 → 没有位置读评分。提前说清楚，
+            # 别让用户以为「勾了刷分却只跑一局」是 bug。
+            self.log_warning("已指定流派但没有指定队长：没有位置读不了评分 → "
+                             "本次只跑一局（刷到目标分需要勾选队长）", notify=True)
         # 运行期状态每次开局都要清（2026-10-29 实机：连开第二把时任务秒退，
         # 因为 _register_stage 还停在上次的 "back"，run() 的终点判据立刻命中）
         self.reset_run_state()
@@ -604,6 +611,12 @@ class TrainingFlowMixin:
             self._launch_queue = None
             return None
         self._queue = queue
+        if getattr(self, "_launch_queue", None) and queue.captain:
+            # 注入队列 = 新的队长安排 → 第一个队长**变了**才带出流派
+            # （同一个人不顶掉用户在流派下拉里手改的值，2026-11-23）
+            current = (self.config.get("指定队长") or "").strip()
+            if queue.captain != current:
+                self.sync_style_for_captain(queue.captain)
         if len(queue.items) == 1:
             item = queue.items[0]
             target = item.get("target")
@@ -744,11 +757,18 @@ class TrainingFlowMixin:
         由 `self._queue.cursor` 记账；进度文件 `logs/training_queue.json`
         本来就跟着队列走，不需要污染配置。
         """
+        previous = getattr(self, "_style_name", None)   # 上一局实际队长
         self.reset_style()
         # **不是** True：`_style_pending` 的含义是「流派没定，要去点日历认队长」，
-        # 而换队长的流派由 `run_one_round` 开头的 `resolve_style_by_config()` 直接查表定，
+        # 换队长的流派由下一局开头的 `resolve_style_by_config()` 直接用配置定，
         # 置 True 会让新一局开局先去点日历（2026-11-04 写多角色队列时差点踩这个坑）。
         self._style_pending = False
+        # 2026-11-23：真的换了队长才带出新流派。队列里「同一个队长再练一局」
+        # 也会走这里（`advance_queue_after_round`），不能把用户手改的流派顶掉。
+        if name != previous:
+            if not self.sync_style_for_captain(name):
+                self.log_warning(f"队长「{name}」不在角色表 → 流派保持"
+                                 f"「{self.config.get('指定流派') or '未选择'}」")
         self._run_score = None
         self.reset_run_state()                 # 含 _register_stage / 卡死计数 / 六维快照
         self.log_info(f"换队长 → {name}（位置 {self._queue.position if self._queue else '?'}"
@@ -1240,9 +1260,9 @@ class TrainingFlowMixin:
 
     @property
     def style(self):
-        """当前流派 —— 由队长决定（见 docs/RULES.md 第 0 节）。
+        """当前流派 —— 选队长时带出并存进「指定流派」，监控页可随时改。
 
-        快速接手流程：进训练时这个变量是空的 → 点一次日历解析队长流派。
+        快速接手流程：进训练时既没有流派也没有队长 → 点一次日历解析队长流派。
         全自动流程（另一条流程，尚未实装）：开局自己把流派写进 `_style`。
         还没定下来时按「训练流」跑（最保守）。
         """
@@ -1254,7 +1274,7 @@ class TrainingFlowMixin:
         return bool(getattr(self, "_style", None))
 
     def reset_style(self):
-        """清空流派（新的一局 / 接管一局）：等日历解析队长。"""
+        """清空流派（新的一局 / 接管一局）：下一拍由 `resolve_style_by_config` 重新定。"""
         self._style = None
         self._style_name = None
         # 状态机和计数器必须一起清：ok-script 复用同一个 Task 实例，
@@ -1263,6 +1283,24 @@ class TrainingFlowMixin:
         self._style_probe_state = None
         self._style_return_tries = 0
         self._style_calendar_tries = 0
+
+    def apply_style_choice(self):
+        """监控页改了「指定流派」→ **立即生效**（用户 2026-11-23 口径）。
+
+        配置的流派直接换 `_style`，下一拍决策就用新流派。当天已经去过/买过
+        的记录是事实，不回滚；剩余行程按新流派重算（`DayState.style` 每拍同步）。
+        流派为空（还没选）时：有队长就查表带出；没队长就置 `_style_pending`
+        回日历路径（接手局只认一次，结果写死进配置）。
+        """
+        name = getattr(self, "_style_name", None)   # 队长身份不是流派，保留
+        self.reset_style()
+        self._style_name = name
+        if self.resolve_style_by_config():
+            self._style_pending = False
+            return True
+        self._style_pending = True
+        self.log_info("流派：未选择 + 未指定队长 → 回训练室/校门口点日历识别")
+        return False
 
     def configured_captain(self):
         """这次 run 的「指定队长」：本次队列优先，否则界面配置。
@@ -1277,7 +1315,7 @@ class TrainingFlowMixin:
         return (self.config.get("指定队长") or "").strip()
 
     def apply_configured_captain(self):
-        """「指定队长」（队列参数或界面配置）→ 直接定流派，**不点日历**。
+        """「指定流派」/ 选中的队长 → 定流派，**不点日历**。
 
         2026-10-30 用户反馈「星期二为什么开日历了，没这个设置吧」：
         旧代码的「指定队长」只用于在选择队长页挑卡（handlers/entry.py），
@@ -1286,20 +1324,9 @@ class TrainingFlowMixin:
         第一个训练日就必然触发 handle_style_probe 去点左上角日历，
         跟「配置里填了队长就开局有流派」的注释完全不一致。
 
-        现在：填了队长就查表定流派；查不到（SR/R 或 OCR 名不匹配）才回落到日历。
+        2026-11-23：与 `resolve_style_by_config` 合并（原来两处同一套查表）。
         """
-        name = self.configured_captain()
-        if not name:
-            return False
-        style = self.style_for_name(name)
-        if not style:
-            self.log_warning(
-                f"配置的队长「{name}」不在角色表（docs/roster）→ 仍按日历识别流派")
-            return False
-        self._style = style
-        self._style_name = name
-        self.log_info(f"流派：{style}（配置指定队长「{name}」，跳过日历）")
-        return True
+        return self.resolve_style_by_config()
 
     def weekend_priority(self, day=None, st=None, texts=None):
         """今天该去的地点（有序）。

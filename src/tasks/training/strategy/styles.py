@@ -413,6 +413,13 @@ class MiniGameStyle(Style):
 STYLES = {s.name: s() for s in
           (TrainingStyle, ShopStyle, GachaStyle, MiniGameStyle)}
 
+# 流派下拉的选项（2026-11-23 起没有「跟随队长」：流派是存储值，
+# 选队长时带出一次，之后两个下拉各改各的）。
+UNSET_STYLE = "未选择"
+STYLE_OPTIONS = tuple(STYLES)
+# 任务配置卡的下拉：多一个「未选择」（监控页用不可选的占位项，不放进这里）。
+CONFIG_STYLE_OPTIONS = (UNSET_STYLE, *STYLE_OPTIONS)
+
 # 流派没定 / 认不出名字时的兜底：`cash_first` / `teammate_first` 按
 # **非训练流**处理（与收口前的 `style != "训练流"` 等价）；`saves_money` 更保守 ——
 # 认不出流派时宁可少花钱（同 `shop.save_money_for_weekend`）。

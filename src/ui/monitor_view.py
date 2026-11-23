@@ -59,6 +59,10 @@ class MonitorActions:
     def set_captain(self, name, memory=""):
         pass
 
+    def set_style(self, name):
+        """流派下拉：训练流 / 商店流 / 扭蛋流 / 小游戏流（立即生效）。"""
+        pass
+
     def toggle_capture(self):
         pass
 
@@ -197,13 +201,16 @@ class MonitorView(QWidget):
 
     def __init__(self, layout: dict, actions: MonitorActions | None = None,
                  captains: dict | None = None,
+                 style_options: list[str] | None = None,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.layout_spec = layout or {}
         self.actions = actions or MonitorActions()
         self.captains = captains or {}
+        self.style_options = list(style_options or [])
         self._captain_check: CheckBox | None = None
         self._captain_combo: ComboBox | None = None
+        self._style_combo: ComboBox | None = None
         self._btn_capture: QPushButton | None = None
         self._btn_conn: QPushButton | None = None
         self._conn_text: tuple[str, str] = ("开始", "暂停")
@@ -240,6 +247,8 @@ class MonitorView(QWidget):
         self._last_captain = ""
         self._last_valid_index = 0
         self._syncing_captain = False
+        self._syncing_style = False
+        self._last_valid_style_index = 0
         self._callbacks: list = []
         self._bindings: list[tuple[QLabel, str, str | None]] = []
         self._timeline_box: QVBoxLayout | None = None
@@ -620,6 +629,22 @@ class MonitorView(QWidget):
         self._captain_combo = combo
         lay.addWidget(combo)
 
+        # 流派下拉（2026-11-23）：只管训练逻辑，和「指定队长」解耦；
+        # 不受队长勾选框控制 —— 接手局（不指定队长）也要能选流派。
+        if self.style_options:
+            lay.addWidget(self._label(spec.get("style_label", "指定流派"), "rowLeft"))
+            style_combo = ComboBox()
+            style_combo.setMinimumWidth(int(spec.get("style_width", 104)))
+            # 占位项不可选：配置为空 = 还没选（接手时点日历识别一次）
+            style_combo.addItem("── 未选择 ──", userData=GROUP)
+            for option in self.style_options:
+                style_combo.addItem(option, userData=option)
+            style_combo.setToolTip(
+                "训练逻辑按哪个流派跑。选队长时会自动带出该队长的流派；"
+                "想换就改这里（立即生效）")
+            self._style_combo = style_combo
+            lay.addWidget(style_combo)
+
         self._captain_check.setToolTip(
             spec.get("hint", "取消勾选 = 不接开局，只跑已有局"))
 
@@ -704,6 +729,8 @@ class MonitorView(QWidget):
 
         combo.currentIndexChanged.connect(self._on_captain_index)
         self._captain_check.toggled.connect(self._on_captain_check)
+        if self._style_combo is not None:
+            self._style_combo.currentIndexChanged.connect(self._on_style_index)
 
         if not self.captains:
             combo.setEnabled(False)
@@ -807,6 +834,44 @@ class MonitorView(QWidget):
             self._last_valid_index = index
             self.actions.set_captain(str(data))
 
+    def _on_style_index(self, index: int):
+        combo = self._style_combo
+        if self._syncing_style or combo is None:
+            return
+        data = combo.itemData(index)
+        if data == GROUP:
+            # 占位项不可选：退回上一个真实流派（没有就停在占位）
+            self._select_style_index(self._last_valid_style_index)
+            return
+        if data:
+            self._last_valid_style_index = index
+            self.actions.set_style(str(data))
+
+    def _select_style_index(self, index: int):
+        combo = self._style_combo
+        if combo is None:
+            return
+        self._syncing_style = True
+        try:
+            combo.setCurrentIndex(max(0, index))
+        finally:
+            self._syncing_style = False
+
+    def _sync_style(self, choice: str):
+        """按配置回填流派下拉；空值显示占位项。用户正拉开下拉时不抢。"""
+        combo = self._style_combo
+        if combo is None:
+            return
+        if combo.dropMenu is not None and combo.dropMenu.isVisible():
+            return
+        index = combo.findData(choice) if choice else -1
+        if index < 0:
+            index = 0                       # 没选 = 占位
+        if index > 0:
+            self._last_valid_style_index = index
+        if combo.currentIndex() != index:
+            self._select_style_index(index)
+
     def _sync_captain(self, name: str, memory: str = ""):
         """按配置回填勾选框和下拉。
 
@@ -906,14 +971,14 @@ class MonitorView(QWidget):
         card = self._card(spec.get("height", 160))
         lay = QVBoxLayout(card)
         lay.setContentsMargins(14, 12, 14, 10)
-        lay.setSpacing(1)
+        lay.setSpacing(0)
 
         head = QHBoxLayout()
         head.addWidget(self._label(item.get("title", "准备页模式"), "cardTitle"))
         head.addStretch(1)
         head.addWidget(self._label("队友/笔记/器材", "hintText"))
         lay.addLayout(head)
-        lay.addSpacing(3)
+        lay.addSpacing(4)
 
         self._prep_radios = {}
         group = QButtonGroup(card)
@@ -921,6 +986,8 @@ class MonitorView(QWidget):
         tags = {"自动选择": "默认", "半自动": "等人", "预配置": "阶段1占位"}
         for mode in item.get("options", ["自动选择", "半自动", "预配置"]):
             row = QHBoxLayout()
+            # 和「今日计划 / 赛事」的行同间距（上下各 5px，2026-11-23 用户口径）
+            row.setContentsMargins(0, 5, 0, 5)
             row.setSpacing(6)
             radio = RadioButton(mode)
             radio.setToolTip(self._prep_tooltip(mode))
@@ -999,6 +1066,8 @@ class MonitorView(QWidget):
         if self._captain_check is not None:
             self._sync_captain(data.get("captain") or "",
                                data.get("captain_memory") or "")
+
+        self._sync_style(data.get("style_choice") or "")
 
         self._sync_run_button(data)
         self._sync_switches(data)

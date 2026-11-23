@@ -22,6 +22,7 @@ from ok.ui.qt.widget.CustomTab import CustomTab
 from ok.util.file import get_relative_path
 
 from src.tasks.training import prep
+from src.tasks.training.strategy import styles
 from src.ui.monitor_view import MISSING, MonitorActions, MonitorView
 
 logger = Logger.get_logger(__name__)
@@ -100,6 +101,9 @@ class _Actions(MonitorActions):
 
     def set_captain(self, name, memory=""):
         self.tab.set_captain(name, memory)
+
+    def set_style(self, name):
+        self.tab.set_style(name)
 
     def toggle_capture(self):
         self.tab.toggle_capture()
@@ -280,7 +284,8 @@ class MonitorTab(CustomTab):
         captain = (config.get("指定队长") or "").strip()
         memory = (config.get("队长下拉选择") or "").strip()
         self._view = MonitorView(self._layout_data, _Actions(self),
-                                  captains=self._captains(captain or memory))
+                                  captains=self._captains(captain or memory),
+                                  style_options=list(styles.STYLE_OPTIONS))
         self.add_widget(self._view)
         self._apply_style()
         self._update_data()
@@ -390,7 +395,8 @@ class MonitorTab(CustomTab):
             "stamina_max": stamina_max if stamina_max is not None else MISSING,
             "stamina_pct": pct,
             "coin": coin if coin is not None else MISSING,
-            "style": info.get("style") or self._style_from_config(config),
+            # 流派以配置为准（空 = 未选择）；运行期 `_style` 只用于决策。
+            "style": self._style_from_config(config),
             "action": info.get("action") or "空闲",
             "uptime": _fmt_uptime(task),
             "task_hint": info.get("task_hint") or "自动训练",
@@ -405,6 +411,8 @@ class MonitorTab(CustomTab):
             # 否则重启后一勾就又退回列表第一个（2026-11-09 用户口径：
             # 队长下拉菜单也要落盘、启动装载）。
             "captain_memory": (config.get("队长下拉选择") or "").strip(),
+            # 流派下拉（2026-11-23）：空/未选择都显示占位项。
+            "style_choice": (config.get("指定流派") or styles.UNSET_STYLE),
             # 第一栏按钮的**唯一**判据（2026-11-09 改成对齐框架 StartCard）：
             # 执行器是否暂停。A（起始页 F9）就只看这一条。
             "paused": self._executor_paused(),
@@ -450,21 +458,12 @@ class MonitorTab(CustomTab):
 
     @staticmethod
     def _style_from_config(config: dict) -> str:
-        """配置里的指定队长 → 流派；查不到就按训练流（和 flow.style 的兜底一致）。
+        """配置里的「指定流派」；还没选就显示「未选择」。
 
-        2026-11-03 改成走 `style_for_name`：错字别名（羽漱川湊 → 羽濑川湊）
-        和「带稀有度前缀 / 丢间隔点」的归一化都只在那一处，别在这里再实现一遍。
+        2026-11-23 起流派是存储值：选队长时带出，之后不再按队长实时派生。
         """
-        name = (config.get("指定队长") or "").strip()
-        if name:
-            try:
-                from src.tasks.training.parsers import TrainingParsersMixin
-                style = TrainingParsersMixin.style_for_name(name)
-                if style:
-                    return style
-            except Exception:  # noqa: BLE001
-                pass
-        return "训练流"
+        explicit = (config.get("指定流派") or "").strip()
+        return explicit if explicit in styles.STYLES else styles.UNSET_STYLE
 
     def _state(self, task) -> str:
         if task is None:
@@ -535,8 +534,9 @@ class MonitorTab(CustomTab):
         「每次指定新队长，旧的安排就清掉，不管单个指定还是传参进来的队列」
         —— 界面改队长 = 作废这次注入的 `_launch_queue`（配置派生值不受影响）。
 
-        运行期变量 `_style` 也清，流派回到「按队长重新认」。
-        取消勾选（name 为空）时同样关掉 `刷到目标分`（没队长没法刷分）。
+        改队长会把该队长的流派写进「指定流派」并立即生效；之后用户想换流派
+        就在流派下拉里显式改。取消勾选（name 为空）时流派改回「未指定」，
+        接手时日历认出队长会再写回来（运行中本局 `_style` 不动）。
         """
         task = self._task()
         if task is None:
@@ -549,7 +549,7 @@ class MonitorTab(CustomTab):
             if value:
                 logger.info(f"监控页：指定队长 → {value}")
             else:
-                logger.info("监控页：取消指定队长 → 清空变量，流派改回按游戏内队长识别")
+                logger.info("监控页：取消指定队长 → 清空变量")
         if remember and (task.config.get("队长下拉选择") or "") != remember:
             task.config["队长下拉选择"] = remember
         if getattr(task, "_launch_queue", None):
@@ -564,16 +564,61 @@ class MonitorTab(CustomTab):
                 logger.info("监控页：取消指定队长 → 「刷到目标分」保留"
                             "（接手后按日历认到的队长生效）")
                 self._notify("已取消指定队长：刷分设置保留，接手后按日历认出的队长继续")
-            # 运行中**不清流派**：本局的队长/流派已经在内存里（`_style` / `_queue`），
-            # 清掉会让剩下这一局按「训练流」跑。下一局开头
-            # `resolve_style_by_config()` 会按新配置重新定（用户 2026-11-11 口径）。
-            if not getattr(task, "running", False):
+            # 2026-11-23 用户口径：取消队长 → 流派也回到「未指定」，
+            # 接手时日历认出队长才能写进流派；运行中本局的 `_style` 不动。
+            if (task.config.get("指定流派") or "") != styles.UNSET_STYLE:
+                task.config["指定流派"] = styles.UNSET_STYLE
+                logger.info("监控页：取消指定队长 → 流派改回「未选择」")
+            in_round = (getattr(task, "running", False)
+                        or getattr(task, "paused", False))
+            if not in_round:
                 reset = getattr(task, "reset_style", None)
                 if callable(reset):
                     try:
                         reset()
                     except Exception as e:  # noqa: BLE001
                         logger.error(f"重置流派失败: {e}")
+        # 2026-11-23：改队长 = 带出该队长的流派（写进「指定流派」），
+        # 之后两个下拉各改各的；用户想换流派就在流派下拉里显式改。
+        if value:
+            sync = getattr(task, "sync_style_for_captain", None)
+            if callable(sync):
+                try:
+                    if not sync(value):
+                        logger.warning(f"监控页：队长「{value}」不在角色表 → "
+                                       f"流派保持不变")
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"队长流派带出失败: {e}")
+            apply = getattr(task, "apply_style_choice", None)
+            if callable(apply):
+                try:
+                    apply()
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"流派立即生效失败: {e}")
+        self._update_data()
+
+    def set_style(self, name):
+        """流派下拉：写配置键 `指定流派`，并让任务**立即生效**（2026-11-23）。
+
+        运行中也直接换 `_style`（下一拍决策就用新流派）；流派是独立存储值，
+        不会再按队长自动变。
+        """
+        task = self._task()
+        if task is None:
+            logger.warning("监控页：没有找到训练任务，流派改动未保存")
+            return
+        value = (name or "").strip()
+        if value not in styles.STYLES:
+            return                       # 下拉占位/未知值不写配置
+        if (task.config.get("指定流派") or "") != value:
+            task.config["指定流派"] = value
+        logger.info(f"监控页：指定流派 → {value}")
+        apply = getattr(task, "apply_style_choice", None)
+        if callable(apply):
+            try:
+                apply()
+            except Exception as e:                    # noqa: BLE001
+                logger.error(f"流派立即生效失败: {e}")
         self._update_data()
 
     @staticmethod

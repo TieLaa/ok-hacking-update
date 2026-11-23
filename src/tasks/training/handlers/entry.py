@@ -650,11 +650,12 @@ class EntryHandlers:
             self.click_box(target, after_sleep=0.8)
         else:
             self.flow_click("confirm_start", after_sleep=0.8)
-        # 新的一局：队长可能换了 —— 配置里填了队长就按它写流派，否则等日历解析
+        # 新的一局：队长可能换了 —— 明确流派/配置队长就按它写流派，否则等日历解析
         self.reset_style()
-        # 只有「真的选到了配置里那个队长」才套用配置流派；
+        # 配置的流派与队长无关，永远套用；没有流派时才按配置队长查一次表，
         # 选的是别的卡（配置队长不在池子里）就等日历读实际队长。
-        if getattr(self, "_captain_matched_config", False):
+        if (getattr(self, "_captain_matched_config", False)
+                or self.configured_style()):
             self.apply_configured_captain()
         # 选择笔记页的限流标记清零，否则下一轮不会自动选择
         self._note_auto_done = False
