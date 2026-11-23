@@ -20,6 +20,7 @@
 import time
 
 from src.tasks.BaseGirlsTask import BaseGirlsTask
+from src.tasks.QuickMatchTask import QuickMatchTask
 from src.tasks.training.handlers.entry import EntryHandlers
 from src.tasks.training.handlers.match import MatchHandlers
 from src.tasks.training.pages import classify_page
@@ -34,19 +35,9 @@ MAX_STEPS = 400         # 单局上限（真打的关要快进上百拍）
 class NationalCupTask(MatchHandlers, EntryHandlers, TrainingParsersMixin,
                       TrainingScoringMixin, SystemUIHandlers, BaseGirlsTask):
 
-    # 顺序与 QuickMatchTask 一致：比赛内 / 结算在前，赛前准备在后
-    HANDLERS = (
-        MatchHandlers.handle_match_intro,
-        MatchHandlers.handle_in_match,
-        MatchHandlers.handle_match_star_result,
-        MatchHandlers.handle_match_retry,
-        MatchHandlers.handle_match_start,
-        MatchHandlers.handle_match_result,
-        MatchHandlers.handle_skill_select,
-        MatchHandlers.handle_event_choice,
-        MatchHandlers.handle_prepare,
-        MatchHandlers.handle_tap_to_continue,
-    )
+    # 直接复用快速比赛的顺序表：比赛内 / 结算在前，赛前准备在后。
+    # 两边不要各写一份，否则 check_duplicates 会报重复代码块。
+    HANDLERS = QuickMatchTask.HANDLERS
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

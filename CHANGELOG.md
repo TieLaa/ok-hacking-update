@@ -7,6 +7,10 @@ here, it falls back to that version's commit messages.
 Format: `## <version>` starts a version, `- ` starts one change. The About page
 lists the entries of **every** version between the installed one and the target.
 
+## v0.2.8
+
+- Fixed the National Cup build failure: its match handler order is now shared with Quick Match instead of duplicated
+
 ## v0.2.7
 
 - Captain filter: the rarity/position checkboxes click reliably now, and the selected captain is recognized right after filtering
