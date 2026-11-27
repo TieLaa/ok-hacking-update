@@ -7,6 +7,14 @@ here, it falls back to that version's commit messages.
 Format: `## <version>` starts a version, `- ` starts one change. The About page
 lists the entries of **every** version between the installed one and the target.
 
+## v0.2.10
+
+- Training multiplier records: a new best above 500% is recorded; the monitor page adds an "auto screenshot" switch (off = numbers only)
+- Breath-holding difficulty picks a stamina-affordable tier and drops one tier when confirming does not advance
+- Shop and gacha rules follow the item classification: training-only success charms, bitter/odd drinks by stamina gap, allowance cards prioritized for all styles, advance payment available from week 5
+- Stars on the equipment page are no longer treated as empty slots
+- Gacha/minigame styles no longer buy non-essential shop items in the first 6 weeks
+
 ## v0.2.9
 
 - Captain and training-style dropdowns are now separate: selecting a captain fills in that captain's style, and the style can be changed on its own at any time (takes effect immediately)

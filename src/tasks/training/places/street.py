@@ -69,7 +69,7 @@ from src.tasks.ui import labels
 from src.tasks.training import attributes
 from src.tasks.training import params
 from src.tasks.training.constants import SHOP_SEASON_WEEKS
-from src.tasks.training.strategy import styles
+
 
     # 地点名（地图上的按钮文字 / 状态里的键）
 PLACE = "步行街"
@@ -78,6 +78,12 @@ PLACE = "步行街"
 # （2026-11-15 用户口径）。名单只列六维：同名的「熟练度暴涨」是器材熟练度，
 # 不在名单里；运行时**不要**改成泛匹配「暴涨」。
 SURGE_NAMES = tuple(f"{a}暴涨" for a in labels.TRAINING_SUBJECTS)
+
+# 「超前消费」：立刻 +300 零用钱，但所有打工基础收入 -60。
+# 2026-11-27 用户口径：第 5 周起可买 —— 之后只剩 5 次打工，5×60 = 300
+# 正好抵掉这张卡的收益，等于白拿；1–4 周打工次数更多，净亏。
+LATE_CASH_NAMES = ("超前消费",)
+LATE_CASH_WEEK = 5
 
 # 「笔记继承」「球员位置」：用户 2026-11-15 口径 —— 彩色版本是**全局第一优先**，
 # 压过零用钱卡和品质分。所有流派的出行日都先进步行街找它们；
@@ -182,6 +188,7 @@ class StreetPlace:
         clear_limit = int(self.config.get("扭蛋清空精力阈值"))
         allow_clear = stamina is not None and stamina < clear_limit
         surge_late = week is not None and week >= SHOP_SEASON_WEEKS
+        cash_late = week is not None and week >= LATE_CASH_WEEK
         required = set(required or ())
         attrs = attrs or {}
         caps = caps or {}
@@ -289,6 +296,9 @@ class StreetPlace:
             if not surge_late and any(n in c["name"] for n in SURGE_NAMES):
                 c["reject"] = "属性暴涨卡（第7周后才买）"
                 continue
+            if not cash_late and any(n in c["name"] for n in LATE_CASH_NAMES):
+                c["reject"] = f"超前消费（第{LATE_CASH_WEEK}周后才买）"
+                continue
             # 清空卡额外一道门槛：只有精力低于阈值时才买（这时是拿精力换属性）
             if c["clear"] and not allow_clear:
                 continue
@@ -346,13 +356,10 @@ class StreetPlace:
                               else 0 if target == "ALL"
                               else 1 if target in required
                               else 2 if target == "PREFERRED" else 3)
-            # 用户 2026-11-14：**增加零用钱的卡最高优先**（商店流/扭蛋流/小游戏流
-            # 都要零用钱买牛奶/秘籍）。它排在**品质之前** ——
-            # 2026-11-14 实跑「器材暴击++(金) vs 额外零用钱+(紫)」选了金卡，
-            # 零用钱才是这些流派的瓶颈。
-            # **训练流例外**：训练流不消费零用钱，零用钱卡没有价值。
-            money_first = styles.style_spec(self.style).cash_first
-            c["money_rank"] = 1 if (money_first and target == "CASH") else 0
+            # 2026-11-24 用户口径：零用钱卡是**刚需**，所有流派都优先
+            # （分类板 essential：额外零用钱 / 超前消费）。超前消费另受
+            # `LATE_CASH_WEEK`（第 5 周）门槛。
+            c["money_rank"] = 1 if target == "CASH" else 0
             # 2026-11-14：**符合本流派的专属卡排最前**（流派优先，品质之前）。
             # 例：训练流里「器材暴击++」比同品质的属性卡更该买（收益率不同）。
             c["style_rank"] = 1 if (card_style is not None

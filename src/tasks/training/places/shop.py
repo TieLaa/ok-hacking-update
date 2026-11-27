@@ -99,8 +99,8 @@ class ShopPlace:
         ("器材手册", 1),
         ("教科书", 2),
     )
-    SHOP_SLOT_BY_CATEGORY = {"textbook": 2, "equipment_boost": 1,
-                             "attribute": 3}
+    SHOP_SLOT_BY_CATEGORY = {"training": 0, "textbook": 2,
+                             "equipment_boost": 1, "attribute": 3}
 
     # ---------- 详情面板效果文本（2026-11-12） ----------
     # 商品卡只显示「名字 + 价格 + 品质底色」，**效果要选中卡片后看右侧详情**。
@@ -114,10 +114,10 @@ class ShopPlace:
     #   - 「训练消耗精力-40%」（牛奶）不能命中「训练精力消耗+10%」（器材教程）。
     SHOP_EFFECT_RULES = (
         ("零用钱", "cash"),
-        ("必定成功", "never"),            # 神之庇佑
-        ("队友训练", "never"),            # 同心护符
-        ("随机属性-", "never"),           # 苦味饮料：拿属性换精力
-        ("什么都没发生", "never"),        # 怪味饮料：可能白花钱
+        ("必定成功", "training"),          # 神之庇佑：训练流专属
+        ("队友训练", "training"),          # 同心护符：训练流专属
+        ("随机属性-", "stamina"),          # 苦味饮料：回精力，随机属性-10
+        ("什么都没发生", "stamina"),       # 怪味饮料：回精力，可能白花钱
         ("训练消耗精力-", "milk"),        # 特训牛奶：训练消耗精力-40%
         ("训练等级", "textbook"),         # 投射训练等级+1
         ("器材熟练度", "equipment_boost"),  # 全部器材熟练度+10
@@ -407,9 +407,22 @@ class ShopPlace:
             return 0
         return 0 if any(t in item["name"] for t in targets) else 1
 
+    def shop_date(self):
+        """商店页的「第N周 星期X」：顶栏读不到时沿用当天状态。
+
+        商店内页顶栏不显示日期（只有专注/零花钱），`current_day()` 会读成
+        (None, None)。「前 6 周留钱 / 第 7 周规则 / 最后一场比赛」都靠日期判，
+        读不到就整条跳过（2026-11-27 实跑第 1 周扭蛋流买了 120 元器材）。
+        `DayState.date` 读不到新日期时沿用旧实例，和 `day_state()` 的常驻语义一致。
+        """
+        week, day = self.current_day()
+        if week is None or day is None:
+            week, day = getattr(getattr(self, "_day", None), "date", None) or (None, None)
+        return week, day
+
     def training_days_left(self):
         """本局剩余训练日（周一~周五）；读不到日期返回 None（不拦）。"""
-        week, day = self.current_day()
+        week, day = self.shop_date()
         idx = WEEKDAY_INDEX.get(day or "")
         if week is None or idx is None:
             return None
@@ -448,7 +461,7 @@ class ShopPlace:
         属性商品，**不分品质**（蓝/白也买）；器材、教科书、牛奶、精力都不买。
         属性缺口、`soft_cap` 减半、余额、0 元商品规则照旧。
         """
-        week, day = self.current_day()
+        week, day = self.shop_date()
         items = [i for i in items
                  if self.shop_category(i["name"]) != "never"
                  and not any(w in i["name"] for w in SHOP_NEVER_BUY)]
@@ -487,7 +500,7 @@ class ShopPlace:
                      if i["price"] == 0
                      or self.item_category(i) not in ("equipment_boost",
                                                       "textbook", "milk",
-                                                      "stamina")]
+                                                      "stamina", "training")]
             if not items:
                 return None, "最后一周：店里只剩器材/教科书/牛奶/精力，关店"
         if final_match:
@@ -589,6 +602,9 @@ class ShopPlace:
         caps = caps or {}
         for i in affordable:
             cat = self.item_category(i)
+            # 训练流专属（神之庇佑 / 同心护符）：别的流派不买
+            if cat == "training" and self.style != "训练流":
+                continue
             slot = self.shop_slot(i["name"], cat)
             group = self.SHOP_GROUP.get(cat, 2)
             quality = (0 if group != 2

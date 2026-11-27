@@ -9,7 +9,9 @@ import time
 
 from ok.feature.Box import Box
 
-from src.tasks.training import attributes, page_signatures, params, roster
+from src.tasks.training import attributes, page_signatures, params, records, roster
+from src.tasks.training import pages as page_registry
+from src.tasks.training import results as round_results
 from src.tasks.ui import labels
 from src.tasks.ui import zoom_reread
 
@@ -90,6 +92,29 @@ class TrainingHandlers:
         self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.6)
         self._result_click_at = time.monotonic()
         self.log_info("训练结果：点屏幕继续")
+        return True
+
+    def handle_boost_status(self, texts):
+        """训练动画的倍率画面（`NNN% Bonus`）：破纪录就记数字，开关控制是否存图。
+
+        用户 2026-11-24：门槛 500%，且必须超过上一次纪录；**数字始终保存**，
+        「自动存图」开关只决定要不要同时截图（口径与落点见 `training/records.py`）。
+        这一页原来没人认领，落到 unknown 兜底；兜底 5 秒限流，倍率帧基本留不下来。
+        读不准的数字不猜（宁可漏记）。
+        """
+        if not page_registry.is_page(self, texts, "boost_status"):
+            return False
+        value = self.read_training_multiplier(texts)
+        if value is not None:
+            key = getattr(self, "_day_key", None)
+            day = f"第{key[0]}周 星期{key[1]}" if key else ""
+            name = records.record(self, value, self.frame,
+                                  captain=round_results._captain(self), day=day,
+                                  save_image=bool(self.config.get("自动存图")))
+            if name is not None:
+                where = f" → newrecord/{name}" if name else "（只记数字，未存图）"
+                self.log_info(f"倍率破纪录：{value}%{where}", notify=True)
+        self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.5)
         return True
 
     def handle_note_study(self, texts):
@@ -985,6 +1010,9 @@ class TrainingHandlers:
     BREATH_MARKS = ("憋气难度", "选择憋气")
     BREATH_CARD_RE = re.compile(r"(\d+)\s*分钟")
     BREATH_CONFIRM_POINT = (0.472, 0.878)     # 1549x871 实测「确定」@ (731,765)
+    # 卡底的体力消耗（⚡20 / ⚡0 / ⚡10）：OCR 读成「B 20」「B10」或纯数字。
+    BREATH_COST_RE = re.compile(r"(\d+)\s*$")
+    BREATH_COST_ROW = (0.60, 0.72)             # 1549x871 实测 y=567~621
 
     def handle_breath_difficulty(self, texts):
         """憋气难度页：先选**时长最长**的那档卡，再点「确定」。
@@ -1000,8 +1028,10 @@ class TrainingHandlers:
         **第一版只点「确定」→ 点了 1019 次页面一动不动**（卡片没选中时「确定」是废的），
         白烧 1200 步 27 分钟。所以必须先点卡再确定。
 
-        选哪档：跟「钓鱼场选最贵」同一条思路 —— **时长更长的档收益更高**
-        （3分钟那张写的是「有机会获得大量零用钱」）。要改口径改这里一行。
+        选哪档：**时长更长的档收益更高**（3分钟那张写的是「有机会获得大量零用钱」），
+        但卡底那排数字是**体力消耗**（⚡20 / ⚡0 / ⚡10），当前体力不够的档点了也选不中
+        （2026-11-25 实跑：4 分钟档要 20、体力只有 16 → 卡片点不中，「确定」连点无效）。
+        所以先按体力筛掉买不起的档，再取时长最长。
         """
         if self.match_text(texts, self.BREATH_MARKS) is None:
             return False
@@ -1009,7 +1039,7 @@ class TrainingHandlers:
             cards = [(int(m.group(1)), t) for t in texts
                      for m in [self.BREATH_CARD_RE.search(t.name.strip())] if m]
             if cards:
-                minutes, card = max(cards, key=lambda c: c[0])
+                minutes, card, stamina = self.pick_breath_card(cards, texts)
                 x, y = self._breath_card_point(card, texts)
                 # 2026-11-14 实跑（logs/1114-230254_野上泷/debug/
                 # 1114-230512_noresp3s）：这一下点击被「让路」闸门吞掉了
@@ -1017,10 +1047,13 @@ class TrainingHandlers:
                 # → 之后每拍只点「确定」，卡片永远是灰的，连点到看门狗接管。
                 # 所以**只认真的发出去的点击**：`_last_click_at` 只在点击完成时更新。
                 before = getattr(self, "_last_click_at", 0.0)
-                self.log_info(f"憋气难度页：选 {minutes} 分钟那档（时长最长）@({x},{y})")
+                self.log_info(f"憋气难度页：选 {minutes} 分钟那档"
+                              f"（体力 {stamina}，在买得起的档里取最长）@({x},{y})")
                 # 卡片淡入：这一拍 OCR 已经读到卡，但按钮还在滑入，点早了会点空
                 # （2026-11-17 实跑：进来第一拍没点中左边金卡，之后一直空点确定）。
-                self.sleep(0.05)
+                # 0.05 秒不够：2026-11-26 11:41 又点空一次（4 分钟档 → 降成 0 消耗档），
+                # 实战经验 0.15 秒最合适。
+                self.sleep(0.15)
                 self.click(x, y, after_sleep=0.5)
                 picked = getattr(self, "_last_click_at", 0.0) != before
                 if not picked:
@@ -1029,13 +1062,14 @@ class TrainingHandlers:
                 return True
             self.log_warning(f"憋气难度页：认不出「N分钟」卡片 → 直接点确定"
                              f"（读到 {[t.name.strip() for t in texts][:6]}…）")
-        # 连点两次「确定」还在这页：说明卡片其实没选中（第一拍点空），
-        # 重置 `_breath_picked` 重新选一次，别一直空点。
+        # 连点两次「确定」还在这页：卡片没选中（点空，或这一档体力不够）。
+        # 重置 `_breath_picked` 并**换下一档**，别一直重选同一张。
         confirms = getattr(self, "_breath_confirms", 0)
         if confirms >= 2 and getattr(self, "_breath_picked", False):
             self._breath_picked = False
             self._breath_confirms = 0
-            self.log_warning("憋气难度页：确定点了两次没反应 → 重新选卡")
+            self._breath_rank = getattr(self, "_breath_rank", 0) + 1
+            self.log_warning("憋气难度页：确定点了两次没反应 → 换下一档重选")
             return True
         self._breath_confirms = confirms + 1
         if self.click_button("confirm", texts=texts, after_sleep=0.9, must=False):
@@ -1045,6 +1079,45 @@ class TrainingHandlers:
         self.click(int(self.width * x), int(self.height * y), after_sleep=0.9)
         self.log_warning("憋气难度页：没认出「确定」文字 → 按实测坐标点（0.472, 0.878）")
         return True
+
+    def pick_breath_card(self, cards, texts):
+        """从「N分钟」卡里选一档：**先按体力筛，再取时长最长**。
+
+        卡底那排数字（⚡20 / ⚡0 / ⚡10）是**体力消耗**，不是零花钱 ——
+        2026-11-25 实跑（logs/1125-093234_野上泷/debug/1125-094543_nochange3）：
+        4 分钟档要 20 体力、当前只有 16，点卡只弹「请选择一个选项」，
+        「确定」连点无效 → 卡死到看门狗。同页零花钱 441，一分都没扣。
+
+        体力/单卡消耗读不到时不拦（沿用旧行为）；`_breath_rank` 是
+        「连续两次点确定没反应」后的降档序号，见 handle_breath_difficulty。
+        返回 (分钟, 卡片框, 当前体力)。
+        """
+        stamina = self.top_bar(texts).get("stamina")
+        ranked = sorted(cards, key=lambda c: -c[0])
+        if stamina is not None:
+            ranked = [c for c in ranked
+                      if (self.breath_card_cost(c[1], texts) or 0) <= stamina] or ranked
+        rank = getattr(self, "_breath_rank", 0)
+        minutes, card = ranked[min(rank, len(ranked) - 1)]
+        return minutes, card, stamina
+
+    def breath_card_cost(self, card, texts):
+        """卡底闪电旁的数字 → 这一档消耗的体力；读不到返回 None（不拦）。"""
+        cx = (card.x + card.width / 2) / self.width
+        lo, hi = self.BREATH_COST_ROW
+        best = None
+        for t in texts:
+            m = self.BREATH_COST_RE.search(t.name.strip())
+            if m is None:
+                continue
+            tx = (t.x + t.width / 2) / self.width
+            if not lo <= (t.y + t.height / 2) / self.height <= hi:
+                continue
+            if abs(tx - cx) > 0.10:
+                continue
+            if best is None or abs(tx - cx) < best[0]:
+                best = (abs(tx - cx), int(m.group(1)))
+        return best[1] if best else None
 
     def _breath_card_point(self, card, texts):
         """卡片的点击点：**标签下沿和说明文字上沿之间的空白区**。

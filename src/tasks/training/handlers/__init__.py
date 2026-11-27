@@ -52,6 +52,9 @@ HANDLERS = (
     MatchHandlers.handle_match_intro,
     MatchHandlers.handle_in_match,
     TrainingHandlers.handle_training_result,
+    # 训练动画的「倍率画面」（倍率加成四张横幅 → NNN% Bonus）：存一张带数字的帧，
+    # 供用户核对这次训练吃到了多少倍率。原来没人认领，被 unknown 兜底 5 秒限流漏光。
+    TrainingHandlers.handle_boost_status,
     # 笔记/球星卡「学习」页（开局装备的笔记触发，不可跳过动画 + 右下「学习」）。
     # 必须排在 handle_street / handle_event_choice 之前：这页带「评分」，
     # 旧版被 handle_street 当成扭蛋详情页点了右上角「返回」（2026-11-02 01:22）。
@@ -208,7 +211,8 @@ LEAVE_RESETS = {
     # `_stamina_ticks` 是「这页连续占了多少拍」的兜底计数（见 STAMINA_PAGE_MAX_TICKS）
     "handle_stamina_recover": {"_stamina_use_at": 0.0, "_stamina_ticks": 0},
     # 憋气难度页的「卡片选过没」：离开这页就清，下次重新选
-    "handle_breath_difficulty": {"_breath_picked": False, "_breath_confirms": 0},
+    "handle_breath_difficulty": {"_breath_picked": False, "_breath_confirms": 0,
+                                 "_breath_rank": 0},
 }
 
 

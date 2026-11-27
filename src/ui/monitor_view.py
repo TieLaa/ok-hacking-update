@@ -77,6 +77,10 @@ class MonitorActions:
         """队长栏右侧「快速比赛」开关：只管快速比赛模块自己（跟自动训练无关）。"""
         pass
 
+    def set_auto_save(self, enabled):
+        """赛事卡「自动存图」开关：训练倍率破纪录时是否存图（落盘配置）。"""
+        pass
+
     def start_national_cup(self):
         """赛事卡【开始】：启动全国大赛任务（挑战券用完自动停）。"""
         pass
@@ -222,6 +226,7 @@ class MonitorView(QWidget):
         # 不拿 `icon()` 和枚举比（PySide 每次返回新 QIcon，比出来永远不相等）。
         self._conn_state: str | None = None
         self._switch_quick: SwitchButton | None = None
+        self._switch_auto_save: SwitchButton | None = None
         self._btn_train: QPushButton | None = None
         # 第二栏【■ 停止】（图标按钮，无文字）：只在任务 enabled 时显示
         self._btn_stop: QPushButton | None = None
@@ -388,6 +393,10 @@ class MonitorView(QWidget):
     @Slot(bool)
     def _slot_quick(self, checked):
         self.actions.set_quick_match(bool(checked))
+
+    @Slot(bool)
+    def _slot_auto_save(self, checked):
+        self.actions.set_auto_save(bool(checked))
 
     def _handler_for(self, action):
         """卡片里的动作按钮 → MonitorView 槽（未知动作给空操作，别崩）。"""
@@ -920,8 +929,11 @@ class MonitorView(QWidget):
             lay = QVBoxLayout(card)
             lay.setContentsMargins(16, 14, 16, 10)
             lay.setSpacing(0)
-            lay.addWidget(self._label(item.get("title", ""), "cardTitle"))
-            lay.addSpacing(4)
+            # 有标题才加标题行：赛事卡 2026-11-24 去掉「赛事」表头，
+            # 让快速比赛开关直接占第一行（高度留给内容，不再单占一行）。
+            if item.get("title"):
+                lay.addWidget(self._label(item["title"], "cardTitle"))
+                lay.addSpacing(4)
             for kdx, row_spec in enumerate(item.get("rows", [])):
                 row_frame = QFrame()
                 row_frame.setObjectName("monitorRow")
@@ -954,6 +966,9 @@ class MonitorView(QWidget):
                     if ctrl.get("action") == "quick_match":
                         self._switch_quick = switch
                         switch.checkedChanged.connect(self._slot_quick)
+                    elif ctrl.get("action") == "auto_save":
+                        self._switch_auto_save = switch
+                        switch.checkedChanged.connect(self._slot_auto_save)
                     row_lay.addWidget(switch)
                 elif kind == "button":
                     btn = self._make_primary(ctrl.get("text", "开始"),
@@ -1167,7 +1182,8 @@ class MonitorView(QWidget):
                 self._btn_train.setIcon(icon)
                 self._train_state = state
             self._sync_stop_button(data)
-        for key, switch in (("quick_enabled", self._switch_quick),):
+        for key, switch in (("quick_enabled", self._switch_quick),
+                            ("auto_save", self._switch_auto_save)):
             if switch is None or key not in data:
                 continue
             value = bool(data.get(key))

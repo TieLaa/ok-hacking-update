@@ -430,7 +430,9 @@ class GirlsInteraction(BaseInteraction):
         解析，并兼容直接传秒的老调用（<5 视为秒）。
 
         节奏对齐实测正常的 `tools/collect_ssr.py:Screen.swipe`：按住后停 0.10s
-        让游戏判定成拖动，然后匀速走 24 步（每步不额外 settle），松手前停 0.05s。
+        让游戏判定成拖动，然后匀速走 24 步（每步不额外 settle），
+        **到目标后先停 `settle_time` 秒再松手**（拖-停-放）；松手太快会带惯性，
+        实测拖 330px 会多滚到 370px。默认 0 时保留旧的 0.05s。
 
         拖拽中途每 6 步看一眼真人输入：用户抢过鼠标就提前松手（finally 里松），
         否则整段拖拽期间用户完全没法拿回指针。
@@ -439,6 +441,9 @@ class GirlsInteraction(BaseInteraction):
         if total > 5:                       # 框架传的是毫秒
             total /= 1000.0
         total = max(total, 0.05)
+        settle = float(settle_time or 0)
+        if settle > 5:                       # 兼容毫秒
+            settle /= 1000.0
 
         if not self._ready_to_act():
             return
@@ -454,7 +459,8 @@ class GirlsInteraction(BaseInteraction):
                 ny = int(y1 + (y2 - y1) * i / steps)
                 self._move_to(nx, ny, settle=0)
                 time.sleep(step_delay)
-            time.sleep(0.05)
+            # 拖-停-放：到目标后停住，等列表速度归零再松手。
+            time.sleep(max(0.05, settle))
         finally:
             win32api.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             self.mark_script_input()

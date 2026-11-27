@@ -539,6 +539,44 @@ class TrainingParsersMixin:
                 rating = t.name.strip()
         return score, rating
 
+    def read_training_multiplier(self, texts):
+        """加成页的倍率（`510%`，或 `510` 与 `%` 拆成两个框）→ int，读不准 None。
+
+        只在出现 `Bonus` 标记的帧上认；范围 100~999。4 位（`1309` 这种粘连）
+        或缺位的数字直接判失败 —— 门槛是 500%，记错比漏记更糟。
+        shortcut: 只用整帧 OCR，漏读就跳过；实跑漏得多再裁左半屏放大重读。
+        """
+        bonus = self.match_text(texts, "Bonus")
+        if bonus is None:
+            return None
+        best = None
+        for t in texts:
+            m = re.fullmatch(r"(\d{2,3})\s*[%％]", (t.name or "").strip())
+            if not m:
+                continue
+            value = int(m.group(1))
+            if not 100 <= value <= 999:
+                continue
+            d = abs((t.y + t.height / 2) - (bonus.y + bonus.height / 2))
+            if best is None or d < best[0]:
+                best = (d, value)
+        if best is not None:
+            return best[1]
+        for pct in (t for t in texts if (t.name or "").strip() in ("%", "％")):
+            for t in texts:
+                m = re.fullmatch(r"(\d{2,3})", (t.name or "").strip())
+                if not m:
+                    continue
+                h = max(t.height, pct.height, 1)
+                if abs((t.y + t.height / 2) - (pct.y + pct.height / 2)) > h * 0.6:
+                    continue
+                if not 0 <= pct.x - (t.x + t.width) <= h * 2:
+                    continue
+                value = int(m.group(1))
+                if 100 <= value <= 999:
+                    return value
+        return None
+
     def read_squad_ratings(self, texts):
         """「恭喜获得 / 训练奖励」页 → `{位置: 评分}`（读不到就是空 dict）。
 

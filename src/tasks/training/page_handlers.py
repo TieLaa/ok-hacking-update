@@ -34,6 +34,7 @@ PAGE_HANDLERS = {
     "skill_select": "handle_skill_select",
     "spin_wheel": "handle_spin_wheel",
     "boost_training": "handle_boost_training",
+    "boost_status": "handle_boost_status",
     "theme_select": "handle_theme_select",
     "manuscript_submit": "handle_manuscript_submit",
     "ingredient_select": "handle_ingredient_select",

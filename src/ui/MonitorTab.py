@@ -60,7 +60,11 @@ DEFAULT_LAYOUT = {
                 ["周末去处", "{weekend_plan}"],
                 ["野餐阈值", "缺口 ≥ {picnic_threshold}"],
             ]},
-            {"id": "race", "title": "赛事", "controls": [
+            {"id": "race", "controls": [
+                {"type": "switch", "label": "自动存图", "action": "auto_save",
+                 "tooltip": "训练倍率破纪录（>500% 且超过上一次纪录）时，"
+                            "自动把当时的画面存到 newrecord/，并追加一条纪录。"
+                            "关闭后只记数字、不存截图。默认开。"},
                 {"type": "switch", "label": "快速比赛", "action": "quick_match",
                  "tooltip": "常驻监听养成之外的比赛（全国大赛 / 圣山战 / 竞技场等）："
                             "赛前跳过 / 进比赛点 ▶▶ / 收结算。开启时执行器还停着会顺手唤醒；"
@@ -116,6 +120,9 @@ class _Actions(MonitorActions):
 
     def set_quick_match(self, enabled):
         self.tab.set_quick_match(enabled)
+
+    def set_auto_save(self, enabled):
+        self.tab.set_auto_save(enabled)
 
     def start_national_cup(self):
         self.tab.start_national_cup()
@@ -439,6 +446,8 @@ class MonitorTab(CustomTab):
                              + gained.get("white", 0)),
             "skill_last": info.get("skill_last") or "",
             "quick_enabled": self._enabled_of(self._task_by_name("QuickMatchTask")),
+            # 赛事卡第一行「自动存图」：训练倍率破纪录是否存图（配置键，落盘）
+            "auto_save": bool(config.get("自动存图")),
             # 第二栏的「刷到目标分 / 目标分」是**配置项**（2026-11-09 用户口径：
             # 落盘、启动装载），不再借 `task._score_stop_on` 这个内存开关。
             # 队列参数由 `TrainingFlowMixin.captain_queue_spec()` 从这三个键派生。
@@ -830,6 +839,19 @@ class MonitorTab(CustomTab):
         task.config[prep.KEY] = mode
         logger.info(f"监控页：准备页模式 → {mode}（设置已保存）")
         self._notify(f"准备页模式：{mode}")
+        self._update_data()
+
+    def set_auto_save(self, enabled):
+        """赛事卡「自动存图」：训练倍率破纪录时是否存图（配置键 `自动存图`，落盘）。
+
+        只影响新纪录的存图；关掉时不写 newrecord/，已有文件与纪录都不动。
+        """
+        task = self._task()
+        if task is None:
+            logger.warning("监控页：没有找到训练任务，「自动存图」未保存")
+            return
+        task.config["自动存图"] = bool(enabled)
+        logger.info(f"监控页：自动存图 → {'开' if enabled else '关'}（设置已保存）")
         self._update_data()
 
     def set_quick_match(self, enabled):
